@@ -28,7 +28,8 @@ public sealed class RuleRunner
         HttpClient? HttpClient = null,
         int MaxSubRuleDepth = 16,
         IReadOnlyList<string>? SubRuleCallStack = null,
-        bool RedactTraceErrors = false);
+        bool RedactTraceErrors = false,
+        int MaxReferenceSetRows = 100_000);
 
     public Envelope Run(Rule rule, JsonElement request, bool debug = false) =>
         RunAsync(rule, request, new Options(Debug: debug)).GetAwaiter().GetResult();
@@ -689,6 +690,7 @@ public sealed class RuleRunner
 
             var refSet = await options.ReferenceSetSource.GetByIdAsync(cfg.Lookup.ReferenceId, ct)
                          ?? throw new InvalidOperationException($"mutator '{node.Id}': reference set '{cfg.Lookup.ReferenceId}' not found");
+            EnsureRefSetSizeWithinLimit(refSet, cfg.Lookup.ReferenceId, options, "mutator", node.Id);
             newValue = LookupRefSet(refSet, cfg.Lookup, run.Request, run.Ctx, frames);
         }
         else if (cfg.From is not null)
@@ -819,6 +821,7 @@ public sealed class RuleRunner
 
         var refSet = await options.ReferenceSetSource.GetByIdAsync(cfg.ReferenceId, ct)
                      ?? throw new InvalidOperationException($"reference '{node.Id}': set '{cfg.ReferenceId}' not found");
+        EnsureRefSetSizeWithinLimit(refSet, cfg.ReferenceId, options, "reference", node.Id);
 
         var rows = new JsonArray();
         foreach (var row in refSet.Rows)
@@ -838,6 +841,21 @@ public sealed class RuleRunner
         var result = JsonDocument.Parse(rows.ToJsonString()).RootElement;
         run.ReferenceLookupCache[cacheKey] = result;
         return (Verdict.Pass, result);
+    }
+
+    /// <summary>
+    /// Caps the size of a fetched reference set. A misconfigured / oversize
+    /// refset (e.g. an accidental million-row import) would otherwise
+    /// memory-pressure the pod and slow the per-row scan loop linearly.
+    /// Tunable via <see cref="Options.MaxReferenceSetRows"/>.
+    /// </summary>
+    private static void EnsureRefSetSizeWithinLimit(
+        ReferenceSet refSet, string refId, Options options, string nodeKind, string nodeId)
+    {
+        if (refSet.Rows.Count > options.MaxReferenceSetRows)
+            throw new InvalidOperationException(
+                $"{nodeKind} '{nodeId}': reference set '{refId}' has {refSet.Rows.Count} rows, " +
+                $"exceeds MaxReferenceSetRows limit ({options.MaxReferenceSetRows})");
     }
 
     private static string ComputeRefLookupKey(string refId, IReadOnlyDictionary<string, JsonElement?> match)
