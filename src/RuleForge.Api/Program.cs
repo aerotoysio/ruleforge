@@ -180,8 +180,8 @@ app.Logger.LogInformation(
 // version) and env bindings for 30s, so the steady-state cost is a
 // dictionary lookup.
 app.MapMethods("/{**path}", new[] { "GET", "POST" },
-    async (HttpContext http, IRuleSource source, RuleRunner runner) =>
-        await Dispatch(http, source, runner));
+    async (HttpContext http, IRuleSource source, RuleRunner runner, ILoggerFactory lf) =>
+        await Dispatch(http, source, runner, lf));
 
 await app.RunAsync();
 
@@ -198,7 +198,7 @@ static object ReadCacheStats(IRuleSource ruleSrc, IReferenceSetSource? refSrc)
     };
 }
 
-static async Task<IResult> Dispatch(HttpContext http, IRuleSource source, RuleRunner runner)
+static async Task<IResult> Dispatch(HttpContext http, IRuleSource source, RuleRunner runner, ILoggerFactory lf)
 {
     var endpoint = http.Request.Path.Value ?? "/";
     var method = string.Equals(http.Request.Method, "GET", StringComparison.OrdinalIgnoreCase)
@@ -279,6 +279,31 @@ static async Task<IResult> Dispatch(HttpContext http, IRuleSource source, RuleRu
             HttpClient: apiHttp,
             RedactTraceErrors: redact),
         http.RequestAborted);
+
+    // Output validation gate — verify the rule's result against its
+    // outputSchema. Per the brief, downgrade to log+warn rather than
+    // 5xx-ing on minor type drift; the engine's job is to ship the
+    // result. Disable per env if a rule emits a chatty/legacy shape
+    // during incident response.
+    var validateOutputCfg = http.RequestServices.GetRequiredService<IConfiguration>()["RULEFORGE_VALIDATE_OUTPUT"]
+                            ?? Environment.GetEnvironmentVariable("RULEFORGE_VALIDATE_OUTPUT")
+                            ?? "true";
+    var validateOutput = !string.Equals(validateOutputCfg, "false", StringComparison.OrdinalIgnoreCase);
+    if (validateOutput
+        && envelope.Decision == Decision.Apply
+        && envelope.Result.HasValue
+        && rule.OutputSchema.ValueKind == JsonValueKind.Object
+        && rule.OutputSchema.EnumerateObject().Any())
+    {
+        var outputErr = SchemaValidator.Validate(rule.OutputSchema, envelope.Result.Value);
+        if (outputErr is not null)
+        {
+            lf.CreateLogger("OutputValidation").LogWarning(
+                "Rule {RuleId}@{Version} produced output that doesn't match outputSchema: {Detail}",
+                rule.Id, envelope.RuleVersion, outputErr);
+        }
+    }
+
     return Results.Json(envelope);
 }
 
