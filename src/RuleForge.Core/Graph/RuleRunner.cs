@@ -29,7 +29,8 @@ public sealed class RuleRunner
         int MaxSubRuleDepth = 16,
         IReadOnlyList<string>? SubRuleCallStack = null,
         bool RedactTraceErrors = false,
-        int MaxReferenceSetRows = 100_000);
+        int MaxReferenceSetRows = 100_000,
+        int PerNodeTimeoutMs = 30_000);
 
     public Envelope Run(Rule rule, JsonElement request, bool debug = false) =>
         RunAsync(rule, request, new Options(Debug: debug)).GetAwaiter().GetResult();
@@ -131,12 +132,17 @@ public sealed class RuleRunner
                 }
             }
 
-            // Execute the node itself
+            // Execute the node itself, bounded by Options.PerNodeTimeoutMs.
+            // Async ops downstream (api / reference / mutator / sub-rule)
+            // honor the linked CT; CPU-bound work (calc / sort / etc.) has
+            // its own bounds (calc timeout, refset size cap).
             Verdict verdict;
             JsonElement? nodeOutput;
             try
             {
-                (verdict, nodeOutput) = await ExecuteNodeAsync(node, frames, subRuleResult, graph, run, options, ct);
+                (verdict, nodeOutput) = await ExecuteWithPerNodeTimeoutAsync(
+                    inner => ExecuteNodeAsync(node, frames, subRuleResult, graph, run, options, inner),
+                    node.Id, node.Data.Category, options, ct);
             }
             catch (Exception e)
             {
@@ -841,6 +847,37 @@ public sealed class RuleRunner
         var result = JsonDocument.Parse(rows.ToJsonString()).RootElement;
         run.ReferenceLookupCache[cacheKey] = result;
         return (Verdict.Pass, result);
+    }
+
+    /// <summary>
+    /// Bounds a single node's execution with <see cref="Options.PerNodeTimeoutMs"/>.
+    /// Async I/O ops (api / reference / mutator / sub-rule) honor the linked
+    /// token and abort cleanly. CPU-bound work doesn't observe the token;
+    /// those nodes have their own bounds (calc timeout, refset size cap).
+    /// On timeout, throws an InvalidOperationException that the runner's
+    /// catch records as a node-execution error in the trace.
+    /// </summary>
+    private static async Task<(Verdict, JsonElement?)> ExecuteWithPerNodeTimeoutAsync(
+        Func<CancellationToken, Task<(Verdict, JsonElement?)>> work,
+        string nodeId,
+        NodeCategory category,
+        Options options,
+        CancellationToken ct)
+    {
+        if (options.PerNodeTimeoutMs <= 0)
+            return await work(ct);
+
+        using var nodeCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        nodeCts.CancelAfter(options.PerNodeTimeoutMs);
+        try
+        {
+            return await work(nodeCts.Token);
+        }
+        catch (OperationCanceledException) when (nodeCts.IsCancellationRequested && !ct.IsCancellationRequested)
+        {
+            throw new InvalidOperationException(
+                $"node '{nodeId}' ({category}) exceeded per-node timeout of {options.PerNodeTimeoutMs}ms");
+        }
     }
 
     /// <summary>
@@ -1845,6 +1882,7 @@ public sealed class RuleRunner
 
         if (msg.Contains("cycle detected", StringComparison.OrdinalIgnoreCase))   return "SUBRULE_CYCLE";
         if (msg.Contains("depth limit exceeded", StringComparison.OrdinalIgnoreCase)) return "SUBRULE_DEPTH_EXCEEDED";
+        if (msg.Contains("exceeded per-node timeout", StringComparison.OrdinalIgnoreCase)) return "PER_NODE_TIMEOUT";
         if (msg.Contains("timed out", StringComparison.OrdinalIgnoreCase))        return "EVALUATION_TIMEOUT";
         if (msg.StartsWith("api '", StringComparison.Ordinal))                    return "API_NODE_ERROR";
         if (msg.StartsWith("calc expression", StringComparison.Ordinal))          return "CALC_EVAL_ERROR";
