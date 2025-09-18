@@ -1,5 +1,37 @@
 # RuleForge Engine — Catch-up Brief
 
+> **⚠ Status (May 2026): the work plan in this brief is COMPLETE.**
+> See **[`ENGINE_CAPABILITIES.md`](./ENGINE_CAPABILITIES.md)** for the
+> current authoritative capability surface. This document is preserved for
+> historical context — how the engine got from "well-engineered prototype"
+> to "production-grade".
+>
+> What shipped (between commits `0e08f1b` and `f8e6592`, ~26 commits):
+>
+> - **Tier 1 safety bundle (6/6):** NCalc cancellation timeout, request
+>   body cap + JSON depth + 400-on-bad-JSON, constant-time auth (UTF-8
+>   bytes, length-padded), sub-rule depth limit + inter-rule cycle
+>   detection, trace error redaction with stable codes, schema validation
+>   gate (input + output).
+> - **8 new node primitives:** `api`, `bucket`, `assert`, `sort`, `limit`,
+>   `distinct`, `switch`, `groupBy`. Plus typed schemas for `constant`
+>   and `product`. All 20 declared `NodeCategory` enum values implemented.
+> - **All 13 GitHub issues triaged and closed** (10 implemented, 1 false
+>   positive, 2 closed by design decision).
+> - **Production-grade bundle:** `/ready` dependency probe, output
+>   validation gate (warn-only), reference-set size guard, per-node
+>   timeouts.
+> - **Performance:** memo cache for reference lookups, perf regression
+>   tests as CI gate.
+> - **Test count:** 265 passing, 0 warnings, 0 errors (was 151).
+>
+> What's still pending (Tier 2-4 from the original plan, deferred until
+> customer pull): trace enrichment + sensitive-field tagging, audit log
+> + diff + rollback API, shadow mode, shared-condition dedupe across
+> sub-rule fan-out, circuit breaker per ruleRef.
+
+---
+
 **Hand-off from the editor track to the engine track.** The editor (`/ruleforge-editor/`) and the engine repo are separate concerns; this brief lets you ship engine-strengthening features in parallel without colliding with editor work.
 
 ---
