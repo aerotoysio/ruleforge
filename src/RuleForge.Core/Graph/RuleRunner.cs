@@ -65,6 +65,7 @@ public sealed class RuleRunner
         var outputNode = rule.Nodes.Single(n => n.Data.Category == NodeCategory.Output);
 
         var run = new RunState(graph, request, options, trace);
+        run.SensitivePaths = CollectSensitivePaths(rule.InputSchema);   // #22 redaction
         run.Activate(inputNode.Id, FrameStack.Empty);
 
         while (run.Queue.Count > 0)
@@ -169,12 +170,18 @@ public sealed class RuleRunner
                             (ctxWritten ??= new())[kv.Key] = kv.Value;
                     }
                 }
+                var enrichment = run.PendingEnrichment;
+                run.PendingEnrichment = null;
                 trace.Add(new TraceEntry(
                     node.Id, IsoUtc(nodeStarted), sw.ElapsedMilliseconds, ToOutcome(verdict),
                     Output: nodeOutput,
                     CtxRead: ctxBefore is null || ctxBefore.Count == 0 ? null : ctxBefore,
                     CtxWritten: ctxWritten,
-                    SubRuleRunId: subRuleRunId));
+                    SubRuleRunId: subRuleRunId,
+                    EvaluatedSource: enrichment?.EvaluatedSource,
+                    EvaluatedLiteral: enrichment?.EvaluatedLiteral,
+                    Operator: enrichment?.Operator,
+                    ArraySelectorReason: enrichment?.ArraySelectorReason));
             }
 
             if (verdict == Verdict.Error)
@@ -413,19 +420,31 @@ public sealed class RuleRunner
                 {
                     var cfg = raw.Deserialize<NumberFilterConfig>(ConfigJsonOptions)!;
                     cfg = ResolveSourceForFrames(cfg, run, frames);
-                    return NumberFilterEvaluator.Evaluate(cfg, fctx).Verdict;
+                    var result = NumberFilterEvaluator.Evaluate(cfg, fctx);
+                    PopulateFilterEnrichment(run, cfg.Source, cfg.Compare.Operator.ToString().ToLowerInvariant(),
+                        ResolvedAsJson(result.ResolvedValues, IsSourcePathSensitive(cfg.Source, run)),
+                        NumberLiteralAsJson(cfg.Compare), result.Reason);
+                    return result.Verdict;
                 }
                 case FilterKind.Date:
                 {
                     var cfg = raw.Deserialize<DateFilterConfig>(ConfigJsonOptions)!;
                     cfg = ResolveSourceForFrames(cfg, run, frames);
-                    return DateFilterEvaluator.Evaluate(cfg, fctx, options.Clock).Verdict;
+                    var result = DateFilterEvaluator.Evaluate(cfg, fctx, options.Clock);
+                    PopulateFilterEnrichment(run, cfg.Source, cfg.Compare.Operator.ToString().ToLowerInvariant(),
+                        ResolvedAsJson(result.ResolvedValues, IsSourcePathSensitive(cfg.Source, run)),
+                        DateLiteralAsJson(cfg.Compare), result.Reason);
+                    return result.Verdict;
                 }
                 default:
                 {
                     var cfg = raw.Deserialize<StringFilterConfig>(ConfigJsonOptions)!;
                     cfg = ResolveSourceForFrames(cfg, run, frames);
-                    return StringFilterEvaluator.Evaluate(cfg, fctx).Verdict;
+                    var result = StringFilterEvaluator.Evaluate(cfg, fctx);
+                    PopulateFilterEnrichment(run, cfg.Source, cfg.Compare.Operator.ToString().ToLowerInvariant(),
+                        ResolvedAsJson(result.ResolvedValues, IsSourcePathSensitive(cfg.Source, run)),
+                        StringLiteralAsJson(cfg.Compare), result.Reason);
+                    return result.Verdict;
                 }
             }
         }
@@ -433,6 +452,104 @@ public sealed class RuleRunner
         {
             throw new InvalidOperationException(
                 $"filter node '{node.Id}' config ({kind}) could not be parsed: {e.Message}", e);
+        }
+    }
+
+    // ─── #22 trace enrichment helpers ──────────────────────────────────────
+
+    internal sealed record TraceEnrichment(
+        JsonElement? EvaluatedSource,
+        JsonElement? EvaluatedLiteral,
+        string? Operator,
+        string? ArraySelectorReason);
+
+    private static void PopulateFilterEnrichment(
+        RunState run, object source, string op,
+        JsonElement? evaluatedSource, JsonElement? evaluatedLiteral, string? reason)
+    {
+        run.PendingEnrichment = new TraceEnrichment(evaluatedSource, evaluatedLiteral, op, reason);
+    }
+
+    private static bool IsSourcePathSensitive(object source, RunState run)
+    {
+        if (run.SensitivePaths is null || run.SensitivePaths.Count == 0) return false;
+        // source is StringFilterSource / NumberFilterSource / DateFilterSource — all share .Path
+        var path = source switch
+        {
+            StringFilterSource s => s.Path,
+            NumberFilterSource n => n.Path,
+            DateFilterSource d   => d.Path,
+            _ => null,
+        };
+        return path is not null && run.SensitivePaths.Contains(path);
+    }
+
+    private static readonly JsonElement MaskedValue = JsonDocument.Parse("\"***\"").RootElement;
+
+    private static JsonElement? ResolvedAsJson<T>(IReadOnlyList<T?> values, bool sensitive)
+    {
+        if (sensitive) return MaskedValue;
+        if (values.Count == 0) return null;
+        if (values.Count == 1)
+            return JsonDocument.Parse(JsonSerializer.Serialize(values[0])).RootElement;
+        return JsonDocument.Parse(JsonSerializer.Serialize(values)).RootElement;
+    }
+
+    private static JsonElement? StringLiteralAsJson(StringFilterCompare cmp)
+    {
+        if (cmp.Values is { Count: > 0 })
+            return JsonDocument.Parse(JsonSerializer.Serialize(cmp.Values)).RootElement;
+        if (cmp.Value is not null)
+            return JsonDocument.Parse(JsonSerializer.Serialize(cmp.Value)).RootElement;
+        return null;
+    }
+
+    private static JsonElement? NumberLiteralAsJson(NumberFilterCompare cmp)
+    {
+        if (cmp.Values is { Count: > 0 })
+            return JsonDocument.Parse(JsonSerializer.Serialize(cmp.Values)).RootElement;
+        if (cmp.Value.HasValue)
+            return JsonDocument.Parse(JsonSerializer.Serialize(cmp.Value.Value)).RootElement;
+        return null;
+    }
+
+    private static JsonElement? DateLiteralAsJson(DateFilterCompare cmp)
+    {
+        if (cmp.Values is { Count: > 0 })
+            return JsonDocument.Parse(JsonSerializer.Serialize(cmp.Values)).RootElement;
+        if (!string.IsNullOrEmpty(cmp.Value))
+            return JsonDocument.Parse(JsonSerializer.Serialize(cmp.Value)).RootElement;
+        if (!string.IsNullOrEmpty(cmp.From) || !string.IsNullOrEmpty(cmp.To))
+            return JsonDocument.Parse(JsonSerializer.Serialize(new { from = cmp.From, to = cmp.To })).RootElement;
+        if (cmp.Amount.HasValue)
+            return JsonDocument.Parse(JsonSerializer.Serialize(new { amount = cmp.Amount, unit = cmp.Unit?.ToString().ToLowerInvariant() })).RootElement;
+        return null;
+    }
+
+    /// <summary>
+    /// Walk the rule's inputSchema collecting JSONPath strings of fields tagged
+    /// `"sensitive": true`. Used by the filter trace enrichment to mask resolved
+    /// values for PII fields (#22). Recurses into nested `properties` and `items`.
+    /// </summary>
+    private static HashSet<string>? CollectSensitivePaths(JsonElement schema)
+    {
+        if (schema.ValueKind != JsonValueKind.Object) return null;
+        var paths = new HashSet<string>(StringComparer.Ordinal);
+        Walk(schema, "$");
+        return paths.Count > 0 ? paths : null;
+
+        void Walk(JsonElement node, string prefix)
+        {
+            if (node.ValueKind != JsonValueKind.Object) return;
+            if (node.TryGetProperty("sensitive", out var s) && s.ValueKind == JsonValueKind.True)
+                paths.Add(prefix);
+            if (node.TryGetProperty("properties", out var props) && props.ValueKind == JsonValueKind.Object)
+            {
+                foreach (var prop in props.EnumerateObject())
+                    Walk(prop.Value, prefix + "." + prop.Name);
+            }
+            if (node.TryGetProperty("items", out var items))
+                Walk(items, prefix + "[*]");
         }
     }
 
@@ -1743,6 +1860,18 @@ public sealed class RuleRunner
         // O(rows) scans on iteration-heavy patterns where the same lookup
         // fires per-passenger / per-segment.
         public Dictionary<string, JsonElement> ReferenceLookupCache { get; } = new();
+
+        // #22 trace enrichment side-channel. Filter (and possibly other) nodes
+        // populate this when they fire; the runner main loop reads it when
+        // building the TraceEntry, then clears it. Avoids changing the
+        // ExecuteNodeAsync return shape across the whole switch.
+        public TraceEnrichment? PendingEnrichment { get; set; }
+
+        // #22 sensitive-field masking. Set of JSONPath strings (e.g. "$.pnr",
+        // "$.payment.cardNumber") whose evaluated values must be masked in
+        // trace output. Populated once from rule.InputSchema at RunInternalAsync
+        // entry; null when no sensitive fields are tagged (no overhead path).
+        public HashSet<string>? SensitivePaths { get; set; }
 
         public RunState(GraphInfo graph, JsonElement request, Options options, List<TraceEntry>? trace)
         {
