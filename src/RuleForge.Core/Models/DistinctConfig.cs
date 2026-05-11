@@ -9,4 +9,5 @@ namespace RuleForge.Core.Models;
 /// </summary>
 public sealed record DistinctConfig(
     string? Key = null,
-    string? Keep = null);   // "first" (default) | "last"
+    string? Keep = null,    // "first" (default) | "last"
+    string? Source = null); // optional JSONPath into request/ctx/frame; else reads from upstream

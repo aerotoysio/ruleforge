@@ -16,4 +16,5 @@ namespace RuleForge.Core.Models;
 public sealed record SortConfig(
     string? SortKey = null,
     string? Direction = null,   // "asc" (default) | "desc"
-    string? Nulls = null);      // "first" | "last" (default) | "error"
+    string? Nulls = null,       // "first" | "last" (default) | "error"
+    string? Source = null);     // optional JSONPath into request/ctx/frame; else reads from upstream

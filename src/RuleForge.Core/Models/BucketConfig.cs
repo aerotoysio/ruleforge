@@ -16,6 +16,7 @@ namespace RuleForge.Core.Models;
 /// </summary>
 public sealed record BucketConfig(
     string HashKey,
-    IReadOnlyList<BucketSpec> Buckets);
+    IReadOnlyList<BucketSpec> Buckets,
+    string? WriteContext = null);
 
 public sealed record BucketSpec(string Name, int Weight);

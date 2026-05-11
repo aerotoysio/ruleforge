@@ -1079,7 +1079,7 @@ public sealed class RuleRunner
         if (string.IsNullOrEmpty(cfg.GroupKey))
             throw new InvalidOperationException($"groupBy '{node.Id}' missing groupKey");
 
-        var input = ReadUpstreamArray(node, frames, graph, run, "groupBy");
+        var input = ReadInputArray(cfg.Source, node, frames, graph, run, "groupBy");
         var keyOf = MakeKeyExtractor(cfg.GroupKey);
 
         // Preserve first-seen group order for deterministic output.
@@ -1131,7 +1131,7 @@ public sealed class RuleRunner
             throw new InvalidOperationException(
                 $"sort '{node.Id}': nulls must be 'first', 'last', or 'error' (got '{cfg.Nulls}')");
 
-        var input = ReadUpstreamArray(node, frames, graph, run, "sort");
+        var input = ReadInputArray(cfg.Source, node, frames, graph, run, "sort");
         if (input.Count <= 1) return MakeArray(input);
 
         var keyOf = MakeKeyExtractor(cfg.SortKey);
@@ -1154,7 +1154,8 @@ public sealed class RuleRunner
             throw new InvalidOperationException(
                 $"limit '{node.Id}': offset must be >= 0 (got {offset})");
 
-        var input = ReadUpstreamArray(node, frames, graph, run, "limit");
+        var input = ReadInputArray(cfg.Source, node, frames, graph, run, "limit");
+        // ^ #25: Source path overrides upstream when set
         return MakeArray(input.Skip(offset).Take(cfg.Count));
     }
 
@@ -1168,7 +1169,7 @@ public sealed class RuleRunner
             throw new InvalidOperationException(
                 $"distinct '{node.Id}': keep must be 'first' or 'last' (got '{cfg.Keep}')");
 
-        var input = ReadUpstreamArray(node, frames, graph, run, "distinct");
+        var input = ReadInputArray(cfg.Source, node, frames, graph, run, "distinct");
         var keyOf = MakeKeyExtractor(cfg.Key);
         var seen = new HashSet<string>(StringComparer.Ordinal);
         var output = new List<JsonElement>();
@@ -1181,6 +1182,27 @@ public sealed class RuleRunner
         }
         if (keep == "last") output.Reverse();
         return MakeArray(output);
+    }
+
+    /// <summary>
+    /// Source-aware input for array transforms (#25). When <paramref name="source"/>
+    /// is set, resolve it as a JSONPath against request/ctx/frames and require an
+    /// array. Otherwise fall back to the single upstream array.
+    /// </summary>
+    private static List<JsonElement> ReadInputArray(
+        string? source, RuleNode node, FrameStack frames, GraphInfo graph, RunState run, string nodeKind)
+    {
+        if (string.IsNullOrEmpty(source))
+            return ReadUpstreamArray(node, frames, graph, run, nodeKind);
+
+        var resolved = ResolveFromPath(source, run.Request, run.Ctx, frames);
+        if (!resolved.HasValue)
+            throw new InvalidOperationException(
+                $"{nodeKind} '{node.Id}': source path '{source}' did not resolve to anything");
+        if (resolved.Value.ValueKind != JsonValueKind.Array)
+            throw new InvalidOperationException(
+                $"{nodeKind} '{node.Id}': source '{source}' is not a JSON array (got {resolved.Value.ValueKind})");
+        return resolved.Value.EnumerateArray().ToList();
     }
 
     private static List<JsonElement> ReadUpstreamArray(
@@ -1328,7 +1350,15 @@ public sealed class RuleRunner
             if (b.Weight <= 0) continue;
             cumulative += b.Weight;
             if (pick < cumulative)
-                return JsonDocument.Parse(JsonSerializer.Serialize(b.Name)).RootElement;
+            {
+                var picked = JsonDocument.Parse(JsonSerializer.Serialize(b.Name)).RootElement;
+                // Optionally publish the chosen bucket to the run context so
+                // downstream switch / filter / logic nodes can route on it via
+                // $ctx.<key>. Closes #24 (bucket → switch chaining).
+                if (!string.IsNullOrEmpty(cfg.WriteContext))
+                    run.Ctx[cfg.WriteContext] = picked;
+                return picked;
+            }
         }
         // Unreachable under the bounds above.
         throw new InvalidOperationException(

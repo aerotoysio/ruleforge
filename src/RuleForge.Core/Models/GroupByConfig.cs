@@ -11,4 +11,6 @@ namespace RuleForge.Core.Models;
 /// be too clunky in practice.
 /// </para>
 /// </summary>
-public sealed record GroupByConfig(string GroupKey);
+public sealed record GroupByConfig(
+    string GroupKey,
+    string? Source = null);   // optional JSONPath into request/ctx/frame; else reads from upstream

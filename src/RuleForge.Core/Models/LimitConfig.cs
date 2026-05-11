@@ -7,4 +7,5 @@ namespace RuleForge.Core.Models;
 /// </summary>
 public sealed record LimitConfig(
     int Count,
-    int? Offset = null);
+    int? Offset = null,
+    string? Source = null);     // optional JSONPath into request/ctx/frame; else reads from upstream
