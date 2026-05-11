@@ -39,6 +39,7 @@ return verb switch
     "mirror"  => await MirrorVerb(rest),
     "bench"   => await BenchVerb(rest),
     "schemas" => SchemasVerb(rest),
+    "serve"   => await ServeVerb(rest),
     "-h" or "--help" => PrintTopLevelHelpAndOk(),
     _ => Unknown(verb),
 };
@@ -63,6 +64,7 @@ static void PrintTopLevelHelp()
           mirror   Copy collections from one DocumentForge instance to another
           bench    Benchmark the engine against a rule source
           schemas  Export JSON Schemas for every config record (for UI builders)
+          serve    Boot a long-running HTTP engine for fast editor test loops
 
         Use `aero <verb> --help` for verb-specific options.
         """);
@@ -825,6 +827,163 @@ static void PrintSchemasHelp()
         """);
 }
 
+// ─── serve ──────────────────────────────────────────────────────────────────
+//
+// Boots the RuleForge HTTP API host with a local fixtures directory — a
+// long-running process the editor / dev tools can hit at ~5ms per test
+// (vs ~120ms paying the dotnet cold-start each time via `run`). Auth
+// defaults to OPEN (no key) since this is a dev/test loop; supply
+// --api-key to lock it down.
+//
+// Closes #28 (HTTP serve), pairs with #29 (hot reload already at
+// /admin/refresh) and #31 (NCalc warm-up shipped in the Api host boot).
+
+static async Task<int> ServeVerb(string[] argv)
+{
+    var opts = ParseServeOpts(argv);
+    if (opts is null) { PrintServeHelp(); return 1; }
+
+    var apiProject = FindApiProject();
+    if (apiProject is null)
+    {
+        Console.Error.WriteLine(
+            "error: could not locate src/RuleForge.Api/RuleForge.Api.csproj relative to the CLI binary.\n" +
+            "       run `serve` from inside the engine repo, or rebuild after a `dotnet build` on the solution.");
+        return 1;
+    }
+
+    var fixturesAbs = Path.GetFullPath(opts.FixturesDir);
+    if (!Directory.Exists(fixturesAbs))
+    {
+        Console.Error.WriteLine($"error: --fixtures '{fixturesAbs}' does not exist or is not a directory.");
+        return 1;
+    }
+
+    var url = $"http://{opts.Host}:{opts.Port}";
+    Console.WriteLine($"━━ RuleForge serve → {url} ━━");
+    Console.WriteLine($"  fixtures : {fixturesAbs}");
+    if (!string.IsNullOrEmpty(opts.RefsDir))
+        Console.WriteLine($"  refs     : {Path.GetFullPath(opts.RefsDir)}");
+    Console.WriteLine($"  auth     : {(string.IsNullOrEmpty(opts.ApiKey) ? "open (no key — dev mode)" : "X-AERO-Key required")}");
+    Console.WriteLine($"  api proj : {apiProject}");
+    Console.WriteLine();
+    Console.WriteLine("Editor can probe `GET /ready` to discover this instance. Ctrl+C to stop.");
+    Console.WriteLine();
+
+    var psi = new System.Diagnostics.ProcessStartInfo
+    {
+        FileName = "dotnet",
+        UseShellExecute = false,
+    };
+    psi.ArgumentList.Add("run");
+    psi.ArgumentList.Add("--project");
+    psi.ArgumentList.Add(apiProject);
+    if (!opts.Build) psi.ArgumentList.Add("--no-build");
+
+    psi.EnvironmentVariables["RULEFORGE_RULE_SOURCE"] = "local";
+    psi.EnvironmentVariables["RULEFORGE_FIXTURES_DIR"] = fixturesAbs;
+    psi.EnvironmentVariables["ASPNETCORE_URLS"] = url;
+    if (!string.IsNullOrEmpty(opts.RefsDir))
+        psi.EnvironmentVariables["RULEFORGE_REFS_DIR"] = Path.GetFullPath(opts.RefsDir);
+    if (!string.IsNullOrEmpty(opts.ApiKey))
+        psi.EnvironmentVariables["RULEFORGE_API_KEY"] = opts.ApiKey;
+
+    var proc = System.Diagnostics.Process.Start(psi);
+    if (proc is null)
+    {
+        Console.Error.WriteLine("error: failed to spawn `dotnet run` for the Api host.");
+        return 1;
+    }
+
+    // Forward Ctrl+C to the child so it shuts down cleanly.
+    Console.CancelKeyPress += (_, e) =>
+    {
+        e.Cancel = true;
+        try { proc.Kill(entireProcessTree: true); } catch { /* already gone */ }
+    };
+
+    await proc.WaitForExitAsync();
+    return proc.ExitCode;
+}
+
+static string? FindApiProject()
+{
+    var dir = AppContext.BaseDirectory;
+    for (var i = 0; i < 10; i++)
+    {
+        var candidate = Path.Combine(dir, "src", "RuleForge.Api", "RuleForge.Api.csproj");
+        if (File.Exists(candidate)) return candidate;
+        var parent = Path.GetFullPath(Path.Combine(dir, ".."));
+        if (parent == dir) break;
+        dir = parent;
+    }
+    return null;
+}
+
+static ServeOpts? ParseServeOpts(string[] argv)
+{
+    string? fixtures = null;
+    string? refs = null;
+    int port = 5050;
+    string host = "127.0.0.1";
+    string? apiKey = null;
+    bool build = false;
+
+    for (var i = 0; i < argv.Length; i++)
+    {
+        switch (argv[i])
+        {
+            case "--fixtures": fixtures = argv[++i]; break;
+            case "--refs":     refs = argv[++i]; break;
+            case "--port":     port = int.Parse(argv[++i]); break;
+            case "--host":     host = argv[++i]; break;
+            case "--api-key":  apiKey = argv[++i]; break;
+            case "--build":    build = true; break;
+            case "-h":
+            case "--help":     return null;
+            default:
+                Console.Error.WriteLine($"unknown arg: {argv[i]}");
+                return null;
+        }
+    }
+    if (fixtures is null) return null;
+    return new ServeOpts(fixtures, refs, port, host, apiKey, build);
+}
+
+static void PrintServeHelp()
+{
+    Console.Error.WriteLine("""
+        serve — boot the RuleForge HTTP engine for fast editor test loops
+
+        Usage:
+          aero serve --fixtures <dir> [--port N] [--host H] [--refs <dir>] [--api-key K] [--build]
+
+        Required:
+          --fixtures <dir>   directory containing rule fixtures (the engine's local rule source)
+
+        Optional:
+          --refs <dir>       directory containing reference set JSON files (defaults to <fixtures>/../refs)
+          --port <N>         port to bind to                                  (default 5050)
+          --host <H>         host/IP to bind to                               (default 127.0.0.1)
+          --api-key <K>      require X-AERO-Key on requests                   (default: open, dev mode)
+          --build            don't pass --no-build to the Api host (forces rebuild)
+
+        What it does:
+          - Spawns the RuleForge.Api host as a child process.
+          - Sources rules from --fixtures via LocalFileRuleSource.
+          - Warms up NCalc expression cache at boot (removes first-request penalty).
+          - Exposes /health (liveness), /ready (deps probe), /admin/refresh (hot reload),
+            /admin/bindings (live bindings + cache stats), and the dynamic catch-all route.
+          - Editor's /api/test should POST to <host>:<port><rule.endpoint> with the request body.
+
+        Stop:
+          Ctrl+C — forwards to the Api child for clean shutdown.
+
+        Hot reload (#29 path):
+          curl -X POST http://<host>:<port>/admin/refresh
+        """);
+}
+
 internal sealed record RunOpts(
     string Endpoint, string RequestArg, string? HttpBaseUrl, bool Debug,
     string FixturesDir, bool UseDf, string? Env, string? DfApiKey, string? DfBaseUrl,
@@ -839,3 +998,5 @@ internal sealed record BenchOpts(
     int Concurrency, bool UseDf, string? Env, string? DfApiKey, string? DfBaseUrl,
     string FixturesDir, bool Cold, string? Prefix = null);
 internal sealed record SchemasOpts(string OutDir);
+internal sealed record ServeOpts(
+    string FixturesDir, string? RefsDir, int Port, string Host, string? ApiKey, bool Build);

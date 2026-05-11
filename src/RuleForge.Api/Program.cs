@@ -6,6 +6,7 @@ using RuleForge.Core.Loader;
 using RuleForge.Core.Models;
 using RuleForge.DocumentForge;
 
+var startedAt = DateTimeOffset.UtcNow;
 var builder = WebApplication.CreateBuilder(args);
 
 // Defense-in-depth limits on the request hot path. The reverse proxy in
@@ -84,10 +85,14 @@ app.MapGet("/health", () => Results.Ok(new { ok = true }));
 // and serving traffic". Bypasses auth like /health, so readiness probes
 // don't need to ship the API key. 2s budget keeps the probe cheap even
 // when DF is slow.
+var engineVersion = System.Reflection.Assembly.GetExecutingAssembly()
+    .GetName().Version?.ToString() ?? "0.0.0";
+
 app.MapGet("/ready", async (IRuleSource source, IReferenceSetSource? refSrc, CancellationToken ct) =>
 {
     using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
     cts.CancelAfter(TimeSpan.FromSeconds(2));
+    var uptime = (int)(DateTimeOffset.UtcNow - startedAt).TotalSeconds;
     try
     {
         var bindings = await source.ListBindingsAsync(cts.Token);
@@ -97,15 +102,18 @@ app.MapGet("/ready", async (IRuleSource source, IReferenceSetSource? refSrc, Can
             ruleSource = "ok",
             bindingCount = bindings.Count,
             referenceSource = refSrc is null ? "not_configured" : "ok",
+            engineVersion,
+            startedAt = startedAt.ToString("O"),
+            uptimeSeconds = uptime,
         });
     }
     catch (OperationCanceledException) when (cts.IsCancellationRequested && !ct.IsCancellationRequested)
     {
-        return Results.Json(new { ok = false, ruleSource = "timeout" }, statusCode: 503);
+        return Results.Json(new { ok = false, ruleSource = "timeout", engineVersion, uptimeSeconds = uptime }, statusCode: 503);
     }
     catch (Exception e)
     {
-        return Results.Json(new { ok = false, ruleSource = "error", detail = e.Message }, statusCode: 503);
+        return Results.Json(new { ok = false, ruleSource = "error", detail = e.Message, engineVersion, uptimeSeconds = uptime }, statusCode: 503);
     }
 });
 
@@ -170,6 +178,52 @@ foreach (var b in bootBindings)
 app.Logger.LogInformation(
     "Discovered {Count} binding(s) at boot. Routing is dynamic — POST /admin/refresh to pick up changes.",
     bootBindings.Count);
+
+// ─── NCalc warm-up ──────────────────────────────────────────────────────────
+//
+// Walk every bound rule and parse each Calc / Assert expression so NCalc's
+// internal parsed-AST cache is populated. Removes the first-request penalty
+// (~30ms per expression) at the cost of a few hundred ms of boot time.
+// Failures are logged but don't abort boot — a bad expression should surface
+// on the first actual request, not crash the engine.
+{
+    var warmSw = System.Diagnostics.Stopwatch.StartNew();
+    var warmCount = 0;
+    var warmFailed = 0;
+    var ruleSrc = app.Services.GetRequiredService<IRuleSource>();
+    foreach (var binding in bootBindings)
+    {
+        var rule = await ruleSrc.GetByIdAsync(binding.RuleId, binding.Version);
+        if (rule is null) continue;
+        foreach (var node in rule.Nodes)
+        {
+            if (node.Data.Category is not (NodeCategory.Calc or NodeCategory.Assert)) continue;
+            if (node.Data.Config is null) continue;
+            try
+            {
+                var cfgObj = node.Data.Config.Value;
+                if (cfgObj.ValueKind != JsonValueKind.Object) continue;
+                string? expr = null;
+                if (cfgObj.TryGetProperty("expression", out var e) && e.ValueKind == JsonValueKind.String)
+                    expr = e.GetString();
+                else if (cfgObj.TryGetProperty("condition", out var c) && c.ValueKind == JsonValueKind.String)
+                    expr = c.GetString();
+                if (string.IsNullOrEmpty(expr)) continue;
+                _ = new NCalc.Expression(expr);   // parses + caches; no Evaluate so no var resolution needed
+                warmCount++;
+            }
+            catch (Exception ex)
+            {
+                warmFailed++;
+                app.Logger.LogDebug("NCalc warm-up failed for node {NodeId}: {Msg}", node.Id, ex.Message);
+            }
+        }
+    }
+    warmSw.Stop();
+    app.Logger.LogInformation(
+        "Pre-compiled {OK} expression(s) in {Ms}ms ({Failed} skipped due to parse error)",
+        warmCount, warmSw.ElapsedMilliseconds, warmFailed);
+}
 
 // ─── dynamic catch-all ──────────────────────────────────────────────────────
 //

@@ -63,6 +63,24 @@ public class ReadinessProbeTests
     }
 
     [Fact]
+    public async Task Ready_includes_engine_version_and_uptime_fields()
+    {
+        // Per issue #30 — editor topbar wants engineVersion + uptimeSeconds + startedAt
+        // for the env pill. Doesn't assert specific values (they vary across runs)
+        // but does assert the fields are present and shaped right.
+        using var factory = Factory(FixturesDir());
+        using var client = factory.CreateClient();
+
+        var resp = await client.GetAsync("/ready");
+        Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
+        var body = await resp.Content.ReadAsStringAsync();
+        Assert.Contains("\"engineVersion\":", body);
+        Assert.Contains("\"uptimeSeconds\":", body);
+        Assert.Contains("\"startedAt\":", body);
+        Assert.Contains("\"bindingCount\":", body);
+    }
+
+    [Fact]
     public async Task Ready_bypasses_auth_when_key_required()
     {
         using var factory = Factory(FixturesDir(), expectedKey: "the-key");
