@@ -39,7 +39,8 @@ public static class CalcEvaluator
         IDictionary<string, JsonElement> ctx,
         JsonElement request,
         IReadOnlyList<IterationFrame>? frames,
-        int timeoutMs = DefaultTimeoutMs)
+        int timeoutMs = DefaultTimeoutMs,
+        Func<DateTimeOffset>? clock = null)
     {
         if (timeoutMs <= 0)
             throw new ArgumentOutOfRangeException(nameof(timeoutMs), "timeoutMs must be > 0");
@@ -52,6 +53,48 @@ public static class CalcEvaluator
         {
             if (TryResolveVariable(name, upstream, ctx, request, frames, out var resolved))
                 args.Result = resolved;
+        };
+
+        // Custom NCalc helpers (#27). Closes #26 (Count covers non-empty check).
+        // ISO-8601 day-of-week (Mon=1 .. Sun=7). All date helpers use UTC unless
+        // the caller injects a different clock via `clock`.
+        expr.EvaluateFunction += (name, args) =>
+        {
+            DateTimeOffset Now() => clock?.Invoke() ?? DateTimeOffset.UtcNow;
+            switch (name.ToLowerInvariant())
+            {
+                case "now":          args.Result = Now().UtcDateTime; break;
+                case "today":        args.Result = Now().UtcDateTime.Date; break;
+                case "parsedate":    args.Result = ToDateTime(args.Parameters[0].Evaluate()); break;
+                case "yearsbetween": args.Result = YearsBetween(ToDateTime(args.Parameters[0].Evaluate()),
+                                                                ToDateTime(args.Parameters[1].Evaluate())); break;
+                case "monthsbetween": args.Result = MonthsBetween(ToDateTime(args.Parameters[0].Evaluate()),
+                                                                  ToDateTime(args.Parameters[1].Evaluate())); break;
+                case "daysbetween":  args.Result = (int)Math.Abs((ToDateTime(args.Parameters[0].Evaluate())
+                                                                  - ToDateTime(args.Parameters[1].Evaluate())).TotalDays); break;
+                case "dayofweek":    args.Result = IsoDayOfWeek(ToDateTime(args.Parameters[0].Evaluate())); break;
+                case "dayofmonth":   args.Result = ToDateTime(args.Parameters[0].Evaluate()).Day; break;
+                case "monthofyear":  args.Result = ToDateTime(args.Parameters[0].Evaluate()).Month; break;
+                case "dayofyear":    args.Result = ToDateTime(args.Parameters[0].Evaluate()).DayOfYear; break;
+                case "isweekend":    var dow = IsoDayOfWeek(ToDateTime(args.Parameters[0].Evaluate()));
+                                     args.Result = dow == 6 || dow == 7; break;
+                case "adddays":      args.Result = ToDateTime(args.Parameters[0].Evaluate())
+                                                    .AddDays(Convert.ToDouble(args.Parameters[1].Evaluate())); break;
+                case "addmonths":    args.Result = ToDateTime(args.Parameters[0].Evaluate())
+                                                    .AddMonths(Convert.ToInt32(args.Parameters[1].Evaluate())); break;
+                case "addyears":     args.Result = ToDateTime(args.Parameters[0].Evaluate())
+                                                    .AddYears(Convert.ToInt32(args.Parameters[1].Evaluate())); break;
+                case "formatdate":
+                    var d = ToDateTime(args.Parameters[0].Evaluate());
+                    var fmt = args.Parameters.Length > 1 ? args.Parameters[1].Evaluate()?.ToString() : null;
+                    args.Result = string.IsNullOrEmpty(fmt) ? d.ToString("O", CultureInfo.InvariantCulture)
+                                                            : d.ToString(fmt, CultureInfo.InvariantCulture);
+                    break;
+                case "count":
+                case "length":       args.Result = ToLength(args.Parameters[0].Evaluate()); break;
+                case "contains":     args.Result = ContainsHelper(args.Parameters[0].Evaluate(),
+                                                                  args.Parameters[1].Evaluate()); break;
+            }
         };
 
         // Race expr.Evaluate() against the deadline. NCalcSync evaluation is
@@ -159,8 +202,86 @@ public static class CalcEvaluator
             case JsonValueKind.True:  value = true;  return true;
             case JsonValueKind.False: value = false; return true;
             case JsonValueKind.Null:  value = null;  return true;
+            case JsonValueKind.Array:
+            case JsonValueKind.Object:
+                // Pass through the JsonElement itself so helpers like Count()
+                // and Contains() can inspect arrays/objects directly (#27).
+                value = el;
+                return true;
         }
         value = null;
+        return false;
+    }
+
+    // ─── helpers (#27) ──────────────────────────────────────────────────────
+
+    private static DateTime ToDateTime(object? v)
+    {
+        return v switch
+        {
+            DateTime dt        => dt,
+            DateTimeOffset dto => dto.UtcDateTime,
+            string s when DateTime.TryParse(s, CultureInfo.InvariantCulture,
+                DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out var parsed) => parsed,
+            JsonElement el when el.ValueKind == JsonValueKind.String => ToDateTime(el.GetString()),
+            null => throw new InvalidOperationException("date helper received null"),
+            _    => throw new InvalidOperationException(
+                $"cannot convert '{v}' (type {v.GetType().Name}) to DateTime")
+        };
+    }
+
+    /// <summary>ISO-8601 day-of-week (Mon=1 .. Sun=7).</summary>
+    private static int IsoDayOfWeek(DateTime d) =>
+        d.DayOfWeek == System.DayOfWeek.Sunday ? 7 : (int)d.DayOfWeek;
+
+    private static int YearsBetween(DateTime a, DateTime b)
+    {
+        var (early, late) = a <= b ? (a, b) : (b, a);
+        var years = late.Year - early.Year;
+        if (late.Month < early.Month || (late.Month == early.Month && late.Day < early.Day))
+            years--;
+        return years;
+    }
+
+    private static int MonthsBetween(DateTime a, DateTime b)
+    {
+        var (early, late) = a <= b ? (a, b) : (b, a);
+        var months = (late.Year - early.Year) * 12 + (late.Month - early.Month);
+        if (late.Day < early.Day) months--;
+        return months;
+    }
+
+    private static long ToLength(object? v) => v switch
+    {
+        JsonElement el when el.ValueKind == JsonValueKind.Array  => el.GetArrayLength(),
+        JsonElement el when el.ValueKind == JsonValueKind.String => el.GetString()?.Length ?? 0,
+        JsonElement el when el.ValueKind == JsonValueKind.Object => el.EnumerateObject().Count(),
+        string s                          => s.Length,
+        System.Collections.ICollection c  => c.Count,
+        null                              => 0,
+        _ => throw new InvalidOperationException(
+            $"cannot compute length of '{v}' (type {v.GetType().Name})")
+    };
+
+    private static bool ContainsHelper(object? haystack, object? needle)
+    {
+        if (haystack is null) return false;
+        if (haystack is JsonElement el)
+        {
+            if (el.ValueKind == JsonValueKind.Array)
+            {
+                var needleStr = needle?.ToString() ?? "";
+                foreach (var item in el.EnumerateArray())
+                {
+                    var itemStr = item.ValueKind == JsonValueKind.String ? item.GetString() : item.GetRawText();
+                    if (string.Equals(itemStr, needleStr, StringComparison.Ordinal)) return true;
+                }
+                return false;
+            }
+            if (el.ValueKind == JsonValueKind.String && needle is not null)
+                return el.GetString()?.Contains(needle.ToString() ?? "", StringComparison.Ordinal) ?? false;
+        }
+        if (haystack is string s) return s.Contains(needle?.ToString() ?? "", StringComparison.Ordinal);
         return false;
     }
 
@@ -172,7 +293,10 @@ public static class CalcEvaluator
         long l  => JsonDocument.Parse(l.ToString(CultureInfo.InvariantCulture)).RootElement,
         double d when double.IsFinite(d) => JsonDocument.Parse(FormatDouble(d)).RootElement,
         decimal dec => JsonDocument.Parse(dec.ToString(CultureInfo.InvariantCulture)).RootElement,
+        DateTime dt => JsonDocument.Parse(JsonSerializer.Serialize(
+            dt.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture))).RootElement,
         string s => JsonDocument.Parse(JsonSerializer.Serialize(s)).RootElement,
+        JsonElement je => je,
         _        => JsonDocument.Parse(JsonSerializer.Serialize(result)).RootElement,
     };
 

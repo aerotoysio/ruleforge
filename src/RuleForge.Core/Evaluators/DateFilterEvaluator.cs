@@ -165,6 +165,37 @@ public static class DateFilterEvaluator
                 var future = AddRelative(now, c.Amount.Value, c.Unit.Value);
                 return lhs >= ToComparable(now, gran, tz) && lhs <= ToComparable(future, gran, tz);
             }
+            // ─── calendar-predicate operators (#20) ─────────────────────────
+            //
+            // Calendar predicates work on the source's local-zone calendar
+            // attributes (day-of-week / day-of-month / month / weekend). The
+            // long-encoded `lhs` is granularity-flattened; we read the raw
+            // DateTimeOffset and apply the configured timezone (or fall back
+            // to UTC) before extracting day/month.
+            case DateFilterOperator.DayOfWeek:
+            case DateFilterOperator.DayOfMonth:
+            case DateFilterOperator.MonthOfYear:
+            {
+                if (c.Values is null || c.Values.Count == 0) return false;
+                var srcDt = ToZoneLocal(raw.Value, tz);
+                int n = c.Operator switch
+                {
+                    DateFilterOperator.DayOfWeek   => srcDt.DayOfWeek == System.DayOfWeek.Sunday ? 7 : (int)srcDt.DayOfWeek,
+                    DateFilterOperator.DayOfMonth  => srcDt.Day,
+                    DateFilterOperator.MonthOfYear => srcDt.Month,
+                    _ => 0,
+                };
+                return c.Values.Contains(n);
+            }
+            case DateFilterOperator.IsWeekend:
+            {
+                var srcDt = ToZoneLocal(raw.Value, tz);
+                var iso = srcDt.DayOfWeek == System.DayOfWeek.Sunday ? 7 : (int)srcDt.DayOfWeek;
+                var isWeekend = iso == 6 || iso == 7;
+                // c.Value is "true" / "false" / null. Default = pass when isWeekend is true.
+                var expected = string.IsNullOrEmpty(c.Value) ? true : bool.Parse(c.Value);
+                return isWeekend == expected;
+            }
             default: return false;
         }
     }
@@ -269,6 +300,25 @@ public static class DateFilterEvaluator
     }
 
     // â”€â”€â”€ comparable scalar â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    /// <summary>
+    /// Returns the source DateTimeOffset converted to the configured timezone
+    /// (or UTC if none specified). Used by calendar-predicate operators (#20)
+    /// where the calendar field depends on the local zone.
+    /// </summary>
+    private static DateTime ToZoneLocal(DateTimeOffset d, string? tzId)
+    {
+        if (string.IsNullOrEmpty(tzId)) return d.UtcDateTime;
+        try
+        {
+            var tz = TimeZoneInfo.FindSystemTimeZoneById(tzId);
+            return TimeZoneInfo.ConvertTime(d, tz).DateTime;
+        }
+        catch (TimeZoneNotFoundException)
+        {
+            return d.UtcDateTime;
+        }
+    }
+
     private static long ToComparable(DateTimeOffset d, DateGranularity gran, string? tzId)
     {
         DateTime local;

@@ -787,7 +787,8 @@ public sealed class RuleRunner
         // Calc evaluator already supports upstream + ctx + request namespaces.
         // Frame-rooted variables ($pax) are resolved here as a custom variable
         // resolver: if the upstream/ctx/request lookup misses, try the frame stack.
-        var computed = CalcEvaluator.Evaluate(cfg.Expression, upstreamEl, run.Ctx, run.Request, frames.ToList());
+        var computed = CalcEvaluator.Evaluate(cfg.Expression, upstreamEl, run.Ctx, run.Request, frames.ToList(),
+            clock: run.Options.Clock);
 
         if (string.IsNullOrEmpty(cfg.Target)) return computed;
 
@@ -1281,7 +1282,8 @@ public sealed class RuleRunner
             .ToList();
         var upstreamEl = upstream.Count == 1 ? upstream[0] : (JsonElement?)null;
 
-        var result = CalcEvaluator.Evaluate(cfg.Condition, upstreamEl, run.Ctx, run.Request, frames.ToList());
+        var result = CalcEvaluator.Evaluate(cfg.Condition, upstreamEl, run.Ctx, run.Request, frames.ToList(),
+            clock: run.Options.Clock);
         if (IsTruthy(result))
             return upstreamEl;   // pass-through on success
 

@@ -23,7 +23,8 @@ public sealed record DateFilterCompare(
     DateUnit? Unit = null,
     string? Timezone = null,
     bool? FromInclusive = null,
-    bool? ToInclusive = null);
+    bool? ToInclusive = null,
+    IReadOnlyList<int>? Values = null);   // #20: calendar-predicate operators
 
 [JsonConverter(typeof(JsonStringEnumConverter<DateFilterOperator>))]
 public enum DateFilterOperator
@@ -37,6 +38,12 @@ public enum DateFilterOperator
     [JsonStringEnumMemberName("within_last")] WithinLast,
     [JsonStringEnumMemberName("within_next")] WithinNext,
     [JsonStringEnumMemberName("is_null")] IsNull,
+    // Calendar-predicate operators (#20). Pass when the source date's
+    // calendar attribute matches the configured Values / Value.
+    [JsonStringEnumMemberName("day_of_week")] DayOfWeek,
+    [JsonStringEnumMemberName("day_of_month")] DayOfMonth,
+    [JsonStringEnumMemberName("month_of_year")] MonthOfYear,
+    [JsonStringEnumMemberName("is_weekend")] IsWeekend,
 }
 
 [JsonConverter(typeof(JsonStringEnumConverter<DateGranularity>))]
