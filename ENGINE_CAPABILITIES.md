@@ -1,8 +1,8 @@
 # RuleForge Engine — Capabilities (current state)
 
 **Snapshot for the editor / consumer track to compare against UI coverage.**
-Updated through commit `f8e6592` (post-production-grade bundle).
-Test count: **265 passing, 0 warnings, 0 errors.**
+Updated through commit `c37c29c` (Tiers E + A + B + D shipped).
+Test count: **315 passing, 0 warnings, 0 errors.**
 
 This is the engine's authoritative surface as of today. If a feature is in
 this doc the engine supports it. If you don't see UI for it, that's a UI
@@ -38,17 +38,17 @@ surface for each that has a Config record.
 
 | Category | Config | Purpose |
 |---|---|---|
-| `filter` | one of `StringFilterConfig` / `NumberFilterConfig` / `DateFilterConfig` (selected by config shape) | Single comparison: `source` × `compare` × `arraySelector` (any/all/none/first/only) × `onMissing` (fail/pass/skip). Routes downstream via pass/fail edge. |
+| `filter` | one of `StringFilterConfig` / `NumberFilterConfig` / `DateFilterConfig` (selected by config shape) | Single comparison: `source` × `compare` × `arraySelector` (any/all/none/first/only) × `onMissing` (fail/pass/skip). Date filter operators: `equals` / `not_equals` / `before` / `after` / `between` / `not_between` / `within_last` / `within_next` / `is_null` plus calendar predicates `day_of_week` / `day_of_month` / `month_of_year` / `is_weekend` (with `values: int[]` for the list operators, `value: "true"\|"false"` for is_weekend). Routes downstream via pass/fail edge. |
 | `logic` | `templateId` (`and`/`or`/`xor`/`not`) + `label` on the node — no Config record | Combines incoming edge verdicts. Routes via pass/fail edge. |
 | `switch` | `SwitchConfig` | Multi-way branch. `{ input, cases: [{match, name}, ...], default? }`. Resolves input once, emits matched case name as a JSON string. Downstream filters route on it. |
 | `assert` | `AssertConfig` | Invariant guard. `{ condition: <ncalc>, errorCode?, errorMessage? }`. Falsy → rule fails with structured error. Truthy → pass-through upstream. |
-| `bucket` | `BucketConfig` | Sticky-hash A/B assignment. `{ hashKey, buckets: [{name, weight}] }`. FNV-1a hash of resolved key → consistent bucket every time. Pairs with shadow mode (when shipped). |
+| `bucket` | `BucketConfig` | Sticky-hash A/B assignment. `{ hashKey, buckets: [{name, weight}], writeContext? }`. FNV-1a hash of resolved key → consistent bucket every time. Optional `writeContext` publishes the chosen name to `$ctx.<key>` so downstream switch/filter/logic nodes can route on it. Pairs with shadow mode (when shipped). |
 
 ### Computation nodes
 
 | Category | Config | Purpose |
 |---|---|---|
-| `calc` | `CalcConfig` | NCalc expression. `{ expression, target? }`. Variable resolution: upstream → ctx → request → iteration frames. Has its own 5s default timeout. |
+| `calc` | `CalcConfig` | NCalc expression. `{ expression, target? }`. Variable resolution: upstream → ctx → request → iteration frames. Has its own 5s default timeout. Helpers (registered): date — `now()` / `today()` / `parseDate(s)` / `yearsBetween(a,b)` / `monthsBetween(a,b)` / `daysBetween(a,b)` / `dayOfWeek(d)` (ISO 1-7) / `dayOfMonth(d)` / `monthOfYear(d)` / `dayOfYear(d)` / `isWeekend(d)` / `addDays(d,n)` / `addMonths(d,n)` / `addYears(d,n)` / `formatDate(d, fmt?)`; array/string — `Count(x)` / `Length(x)` (alias) / `Contains(haystack, needle)`. |
 | `reference` | `ReferenceConfig` | Multi-row lookup against a refset. `{ referenceId, matchOn?: { col: $.path, ... } }`. Returns matched rows as JSON array. Per-request memo cache. |
 | `api` | `ApiConfig` | Outbound HTTP. `{ url, method, timeoutMs, headers?, body?, responseMap? }`. URL/headers can be literal or `$.path`. Body supports `${...}` placeholders. `timeoutMs` mandatory. |
 
@@ -65,10 +65,13 @@ All read a single upstream array, transform, and emit.
 
 | Category | Config | Purpose |
 |---|---|---|
-| `sort` | `SortConfig` | `{ sortKey?, direction?: asc/desc, nulls?: first/last/error }`. Stable. SortKey is JSONPath relative to each element; null/missing = sort whole element. |
-| `limit` | `LimitConfig` | `{ count, offset? }`. Take-N after optional skip. |
-| `distinct` | `DistinctConfig` | `{ key?, keep?: first/last }`. Dedupe by key (or whole element). |
-| `groupBy` | `GroupByConfig` | `{ groupKey }`. Partitions into `{ key1: [...], key2: [...] }`. Preserves first-seen group order. |
+| `sort` | `SortConfig` | `{ sortKey?, direction?: asc/desc, nulls?: first/last/error, source? }`. Stable. SortKey is JSONPath relative to each element. Optional `source: $.path` reads input array from request/ctx/frames instead of upstream. |
+| `limit` | `LimitConfig` | `{ count, offset?, source? }`. Take-N after optional skip. |
+| `distinct` | `DistinctConfig` | `{ key?, keep?: first/last, source? }`. Dedupe by key (or whole element). |
+| `groupBy` | `GroupByConfig` | `{ groupKey, source? }`. Partitions into `{ key1: [...], key2: [...] }`. Preserves first-seen group order. |
+
+All four array transforms accept an optional `source: "$.path"` to read directly
+from request / ctx / frames; absent = read from upstream (backward-compatible).
 
 ### Sub-rule node
 
@@ -117,10 +120,14 @@ Two conventions in node configs:
 | Method | Path | Auth | Purpose |
 |---|---|---|---|
 | GET | `/health` | bypass | Liveness — always 200, doesn't probe deps. |
-| GET | `/ready` | bypass | Readiness — probes `IRuleSource` with 2s budget. 200 with `{ ok, ruleSource, bindingCount, referenceSource }`, or 503 with `{ ok: false, ruleSource: "error"|"timeout", detail? }`. |
+| GET | `/ready` | bypass | Readiness — probes `IRuleSource` with 2s budget. 200 with `{ ok, ruleSource, bindingCount, referenceSource, engineVersion, startedAt, uptimeSeconds }`, or 503 with `{ ok: false, ruleSource: "error"|"timeout", detail?, engineVersion, uptimeSeconds }`. |
 | GET | `/admin/bindings` | required | Lists currently bound endpoints + cache stats. |
 | POST | `/admin/refresh` | required | Drops source caches; new rule versions and new endpoints become live. |
 | GET / POST | `/{**path}` | required | Catch-all → looks up the bound rule for `(method, path)`, parses body, validates input schema, evaluates, validates output schema (warn-only), returns `Envelope` JSON. |
+
+**Boot:** NCalc expressions in every bound rule's calc/assert nodes are
+pre-compiled at startup (and after every `/admin/refresh`) so the first
+request doesn't pay the ~30 ms per-expression cold-compile cost.
 
 **Special query/headers on the catch-all:**
 - `?debug=true` or `X-Debug: true` — populates `envelope.trace` with per-node entries.
@@ -164,6 +171,10 @@ Two conventions in node configs:
 | `ctxWritten` | dict? | Context keys the node wrote |
 | `subRuleRunId` | string? | When the node invoked a sub-rule |
 | `error` | string? | When outcome=error. **Redacted to a stable code** when `RedactTraceErrors=true`. |
+| `evaluatedSource` | JSON? | Filter nodes: resolved source value at compare time. Masked to `"***"` when the source's JSONPath matches a `sensitive: true` property in inputSchema. |
+| `evaluatedLiteral` | JSON? | Filter nodes: resolved literal / values (right-hand side of the comparison). Never masked — this is the rule's authored value. |
+| `operator` | string? | Filter nodes: the operator that ran (`equals`, `in`, `between`, `day_of_week`, ...). |
+| `arraySelectorReason` | string? | Filter nodes: when source was an array — "any matched", "first non-match at index 2", etc. |
 
 ### Redacted error codes
 
@@ -211,6 +222,7 @@ might want to tune.
 - Validates request body against `rule.inputSchema` (JSON Schema 2020-12 via `JsonSchema.Net`).
 - On violation: 400 with `{ error: "schema_validation_failed", detail: "$.field: <msg>" }`.
 - Empty / missing schema = no constraints.
+- **Custom keyword `sensitive: true`** on property definitions — values from those paths are masked to `"***"` in filter trace `evaluatedSource` fields. Doesn't affect rule data flow (the real value still flows through evaluation).
 
 **Output gate (default on, opt-out via env):**
 - Validates `envelope.result` against `rule.outputSchema` after evaluation.
@@ -281,8 +293,6 @@ likely value if/when prioritised.
 
 | Feature | Status | Notes |
 |---|---|---|
-| **Trace enrichment** (per-filter both-sides + operator + per-node duration in trace `evaluatedSource` / `evaluatedLiteral` / `operator` fields) | not built | Editor's explainability UI is gated on this shape |
-| **`sensitive` field tag** on `inputSchema` properties for trace masking | not built | Adds a contract; engine masks at trace-emit time |
 | **Audit log** (write-only journal of who-changed-what-when) | not built | Belongs partially in DocumentForge layer |
 | **Diff API** (`GET /v1/rules/[id]/diff?from=v3&to=v4`) | not built | Structured diff of nodes + bindings |
 | **Rollback API** (`POST /v1/rules/[id]/rollback`) | not built |  |

@@ -57,7 +57,7 @@ that target by ~70× at warm steady-state.
 git clone https://github.com/tailwind-retailing/ruleforge.git
 cd ruleforge
 dotnet build
-dotnet test                                  # 265/265 green
+dotnet test                                  # 315/315 green
 
 # Run a sample rule against a sample request, in-process, against the
 # bundled local fixture pack (no DocumentForge required for this path):
@@ -110,7 +110,7 @@ src/
   RuleForge.Cli             run · publish · mirror · bench
 
 tests/
-  RuleForge.Core.Tests      265 unit + integration tests
+  RuleForge.Core.Tests      315 unit + integration tests
 
 fixtures/
   rules/                    Versioned rule snapshots + endpoint bindings
