@@ -8,7 +8,7 @@
 #
 # To deploy:
 #   1. Push this repo to GitHub (already done).
-#   2. In Render: New + → Blueprint → select tailwind-retailing/ruleforge.
+#   2. In Render: New + → Blueprint → select aerotoysio/ruleforge.
 #   3. Render reads this file and creates a Docker web service.
 #   4. Before the first request: in the dashboard, populate the two
 #      sync: false secrets (RULEFORGE_DF_API_KEY, RULEFORGE_API_KEY).

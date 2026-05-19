@@ -10,7 +10,7 @@ against rule graphs, and returns decisions.
 > Companion docs:
 > - DocumentForge — https://documentforge-docs.onrender.com/index.html
 > - AERO admin (this app) — same repo, deployed at the Render URL on
->   `steve-iata/airline-rules-engine`. The TypeScript evaluators in
+>   `aerotoysio/airline-rules-engine`. The TypeScript evaluators in
 >   `src/shared/evaluators/` are the **reference implementations**;
 >   reproduce their semantics in C#.
 
@@ -476,8 +476,8 @@ Two repos, one mental model.
    ```
    We're building the .NET runtime engine described in docs/BRIEF.md.
    Read it end-to-end, then read the TS reference evaluators at:
-     https://github.com/steve-iata/airline-rules-engine/tree/main/src/shared/evaluators
-     https://github.com/steve-iata/airline-rules-engine/blob/main/src/shared/types.ts
+     https://github.com/aerotoysio/airline-rules-engine/tree/main/src/shared/evaluators
+     https://github.com/aerotoysio/airline-rules-engine/blob/main/src/shared/types.ts
    Then propose a concrete first slice that ships milestone 11 — single
    rule, walking skeleton, one scenario green.
    ```

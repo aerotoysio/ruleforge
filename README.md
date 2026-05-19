@@ -6,7 +6,7 @@ sub-rule calls.** Rules are authored visually (in your own admin app), pinned
 per environment, and evaluated at request time with a sub-millisecond hot
 path.
 
-> Sibling project to [DocumentForge](https://github.com/tailwind-retailing/documentforge) —
+> Sibling project to [DocumentForge](https://github.com/aerotoysio/documentforge) —
 > RuleForge stores its rules and reference data inside DocumentForge, but
 > the engine is a clean HTTP service you can drop in anywhere.
 
@@ -54,7 +54,7 @@ that target by ~70× at warm steady-state.
 ## Quick start
 
 ```bash
-git clone https://github.com/tailwind-retailing/ruleforge.git
+git clone https://github.com/aerotoysio/ruleforge.git
 cd ruleforge
 dotnet build
 dotnet test                                  # 315/315 green
@@ -130,7 +130,7 @@ DocumentForge (oregon region) so cold-path lookups stay loopback-fast.
 **Steps**
 
 1. In the Render dashboard: **New +** → **Blueprint** → select
-   `tailwind-retailing/ruleforge`. Render reads `render.yaml` and creates the
+   `aerotoysio/ruleforge`. Render reads `render.yaml` and creates the
    service.
 2. Set the two `sync: false` secrets in the Render dashboard:
    - `RULEFORGE_DF_API_KEY` — bearer token for the DocumentForge HTTP API
