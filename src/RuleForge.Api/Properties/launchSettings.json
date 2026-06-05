@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json.schemastore.org/launchsettings.json",
+  "profiles": {
+    "RuleForge.Api (insurance demo)": {
+      "commandName": "Project",
+      "dotnetRunMessages": true,
+      "launchBrowser": false,
+      "applicationUrl": "http://localhost:5050",
+      "environmentVariables": {
+        "ASPNETCORE_ENVIRONMENT": "Development",
+        "RULEFORGE_RULE_SOURCE": "local",
+        "RULEFORGE_FIXTURES_DIR": "C:/DATA/14. Aerotoys RuleForge/ruleforge-sample-workspace/insurance-demo/engine-fixtures/rules",
+        "RULEFORGE_REFS_DIR": "C:/DATA/14. Aerotoys RuleForge/ruleforge-sample-workspace/insurance-demo/engine-fixtures/refs"
+      }
+    },
+    "RuleForge.Api (editor staging)": {
+      "commandName": "Project",
+      "dotnetRunMessages": true,
+      "launchBrowser": false,
+      "applicationUrl": "http://localhost:5050",
+      "environmentVariables": {
+        "ASPNETCORE_ENVIRONMENT": "Development",
+        "RULEFORGE_RULE_SOURCE": "local",
+        "RULEFORGE_FIXTURES_DIR": "C:/DATA/14. Aerotoys RuleForge/ruleforge-sample-workspace/.engine-staging",
+        "RULEFORGE_REFS_DIR": "C:/DATA/14. Aerotoys RuleForge/ruleforge-sample-workspace/refs"
+      }
+    },
+    "RuleForge.Api (bundled engine fixtures)": {
+      "commandName": "Project",
+      "dotnetRunMessages": true,
+      "launchBrowser": false,
+      "applicationUrl": "http://localhost:5050",
+      "environmentVariables": {
+        "ASPNETCORE_ENVIRONMENT": "Development",
+        "RULEFORGE_RULE_SOURCE": "local"
+      }
+    }
+  }
+}

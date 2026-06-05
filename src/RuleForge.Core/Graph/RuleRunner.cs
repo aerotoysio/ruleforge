@@ -788,8 +788,6 @@ public sealed class RuleRunner
     {
         if (node.Data.Config is null) throw new InvalidOperationException($"mutator '{node.Id}' has no config");
         var cfg = ParseConfig<MutatorConfig>(node, "mutator");
-        if (string.IsNullOrEmpty(cfg.Target))
-            throw new InvalidOperationException($"mutator '{node.Id}' missing target");
 
         // Find single upstream output at THIS frame.
         var inEdges = graph.Incoming.GetValueOrDefault(node.Id) ?? new List<RuleEdge>();
@@ -804,6 +802,25 @@ public sealed class RuleRunner
         var baseObj = upstream.Count == 1 && upstream[0].ValueKind == JsonValueKind.Object
             ? JsonNode.Parse(upstream[0].GetRawText())!.AsObject()
             : new JsonObject();
+
+        // Multi-field set: apply each {target, from|value} onto the object in
+        // order. One "map fields" node replaces a chain of single Set mutators.
+        if (cfg.Sets is { Count: > 0 })
+        {
+            foreach (var s in cfg.Sets)
+            {
+                if (string.IsNullOrEmpty(s.Target)) continue;
+                var setVal = s.From is not null
+                    ? ResolveFromPath(s.From, run.Request, run.Ctx, frames)
+                    : s.Value;
+                if (setVal.HasValue)
+                    baseObj[s.Target] = JsonNode.Parse(setVal.Value.GetRawText());
+            }
+            return (Verdict.Pass, JsonDocument.Parse(baseObj.ToJsonString()).RootElement);
+        }
+
+        if (string.IsNullOrEmpty(cfg.Target))
+            throw new InvalidOperationException($"mutator '{node.Id}' missing target or sets");
 
         JsonElement? newValue;
         if (cfg.Lookup is not null)

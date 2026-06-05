@@ -15,11 +15,23 @@ namespace RuleForge.Core.Models;
 ///                  uses the named column as the new value.
 /// </summary>
 public sealed record MutatorConfig(
-    string Target,
+    string Target = "",
     System.Text.Json.JsonElement? Value = null,
     string? From = null,
     LookupSpec? Lookup = null,
-    OnLookupMissing OnMissing = OnLookupMissing.Leave);
+    OnLookupMissing OnMissing = OnLookupMissing.Leave,
+    IReadOnlyList<MutatorSet>? Sets = null);
+
+/// <summary>
+/// One field assignment within a multi-field (map) mutator. When a mutator's
+/// <c>Sets</c> list is present, each entry writes <c>From</c> (a JSONPath /
+/// <c>$ctx.</c> path) or <c>Value</c> (a literal) onto the named target field —
+/// so a single node replaces a chain of single-field Set mutators.
+/// </summary>
+public sealed record MutatorSet(
+    string Target,
+    System.Text.Json.JsonElement? Value = null,
+    string? From = null);
 
 public sealed record LookupSpec(
     string ReferenceId,

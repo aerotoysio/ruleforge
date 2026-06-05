@@ -67,6 +67,13 @@ else
 builder.Services.AddSingleton(new HttpClient { Timeout = Timeout.InfiniteTimeSpan });
 
 builder.Services.AddSingleton<RuleRunner>();
+
+// CORS for local browser-based demos (e.g. the insurance-demo HTML pages
+// calling the engine from another origin/port). The policy is only wired into
+// the pipeline when running in Development (see below) — production behaviour
+// is unchanged.
+builder.Services.AddCors(o => o.AddPolicy("demo", p =>
+    p.AllowAnyOrigin().AllowAnyHeader().AllowAnyMethod()));
 builder.Services.ConfigureHttpJsonOptions(o =>
 {
     o.SerializerOptions.PropertyNamingPolicy = AeroJson.Options.PropertyNamingPolicy;
@@ -75,6 +82,12 @@ builder.Services.ConfigureHttpJsonOptions(o =>
 });
 
 var app = builder.Build();
+
+// Browser CORS preflight (OPTIONS) must clear before the API-key gate. The
+// "demo" policy only exists in the pipeline under Development, so this is a
+// safe no-op in Production.
+if (app.Environment.IsDevelopment())
+    app.UseCors("demo");
 
 app.UseMiddleware<ApiKeyMiddleware>();
 
