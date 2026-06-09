@@ -6,7 +6,12 @@ public sealed record NumberFilterConfig(
     NumberFilterSource Source,
     NumberFilterCompare Compare,
     ArraySelector ArraySelector,
-    OnMissing OnMissing);
+    OnMissing OnMissing,
+    // Multiple layered comparisons on the same Source, combined by Match. When
+    // null/empty the legacy single `Compare` is used (back-compatible).
+    IReadOnlyList<NumberFilterCompare>? Conditions = null,
+    // "all" (AND, default) or "any" (OR) across Conditions.
+    string? Match = null);
 
 public sealed record NumberFilterSource(
     SourceKind Kind,

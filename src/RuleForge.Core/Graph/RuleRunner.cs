@@ -35,7 +35,7 @@ public sealed class RuleRunner
     public Envelope Run(Rule rule, JsonElement request, bool debug = false) =>
         RunAsync(rule, request, new Options(Debug: debug)).GetAwaiter().GetResult();
 
-    public Task<Envelope> RunAsync(
+    public Task<Envelope>   RunAsync(
         Rule rule,
         JsonElement request,
         Options? options = null,
@@ -354,6 +354,9 @@ public sealed class RuleRunner
             case NodeCategory.Calc:
                 return (Verdict.Pass, ExecuteCalc(node, frames, graph, run));
 
+            case NodeCategory.TextParse:
+                return (Verdict.Pass, ExecuteTextParse(node, frames, graph, run));
+
             case NodeCategory.Iterator:
                 // Iterator emits a Pass to drive routing — fan-out happens in caller.
                 return (Verdict.Pass, null);
@@ -421,9 +424,14 @@ public sealed class RuleRunner
                     var cfg = raw.Deserialize<NumberFilterConfig>(ConfigJsonOptions)!;
                     cfg = ResolveSourceForFrames(cfg, run, frames);
                     var result = NumberFilterEvaluator.Evaluate(cfg, fctx);
-                    PopulateFilterEnrichment(run, cfg.Source, cfg.Compare.Operator.ToString().ToLowerInvariant(),
+                    var multi = cfg.Conditions is { Count: > 0 };
+                    PopulateFilterEnrichment(run, cfg.Source,
+                        multi ? $"match:{cfg.Match ?? "all"}" : cfg.Compare.Operator.ToString().ToLowerInvariant(),
                         ResolvedAsJson(result.ResolvedValues, IsSourcePathSensitive(cfg.Source, run)),
-                        NumberLiteralAsJson(cfg.Compare), result.Reason);
+                        multi
+                            ? JsonDocument.Parse(JsonSerializer.Serialize(cfg.Conditions, ConfigJsonOptions)).RootElement
+                            : NumberLiteralAsJson(cfg.Compare),
+                        result.Reason);
                     return result.Verdict;
                 }
                 case FilterKind.Date:
@@ -431,9 +439,14 @@ public sealed class RuleRunner
                     var cfg = raw.Deserialize<DateFilterConfig>(ConfigJsonOptions)!;
                     cfg = ResolveSourceForFrames(cfg, run, frames);
                     var result = DateFilterEvaluator.Evaluate(cfg, fctx, options.Clock);
-                    PopulateFilterEnrichment(run, cfg.Source, cfg.Compare.Operator.ToString().ToLowerInvariant(),
+                    var multiD = cfg.Conditions is { Count: > 0 };
+                    PopulateFilterEnrichment(run, cfg.Source,
+                        multiD ? $"match:{cfg.Match ?? "all"}" : cfg.Compare.Operator.ToString().ToLowerInvariant(),
                         ResolvedAsJson(result.ResolvedValues, IsSourcePathSensitive(cfg.Source, run)),
-                        DateLiteralAsJson(cfg.Compare), result.Reason);
+                        multiD
+                            ? JsonDocument.Parse(JsonSerializer.Serialize(cfg.Conditions, ConfigJsonOptions)).RootElement
+                            : DateLiteralAsJson(cfg.Compare),
+                        result.Reason);
                     return result.Verdict;
                 }
                 default:
@@ -441,9 +454,14 @@ public sealed class RuleRunner
                     var cfg = raw.Deserialize<StringFilterConfig>(ConfigJsonOptions)!;
                     cfg = ResolveSourceForFrames(cfg, run, frames);
                     var result = StringFilterEvaluator.Evaluate(cfg, fctx);
-                    PopulateFilterEnrichment(run, cfg.Source, cfg.Compare.Operator.ToString().ToLowerInvariant(),
+                    var multiS = cfg.Conditions is { Count: > 0 };
+                    PopulateFilterEnrichment(run, cfg.Source,
+                        multiS ? $"match:{cfg.Match ?? "all"}" : cfg.Compare.Operator.ToString().ToLowerInvariant(),
                         ResolvedAsJson(result.ResolvedValues, IsSourcePathSensitive(cfg.Source, run)),
-                        StringLiteralAsJson(cfg.Compare), result.Reason);
+                        multiS
+                            ? JsonDocument.Parse(JsonSerializer.Serialize(cfg.Conditions, ConfigJsonOptions)).RootElement
+                            : StringLiteralAsJson(cfg.Compare),
+                        result.Reason);
                     return result.Verdict;
                 }
             }
@@ -931,6 +949,95 @@ public sealed class RuleRunner
             : new JsonObject();
         baseObj[cfg.Target] = computed.HasValue ? JsonNode.Parse(computed.Value.GetRawText()) : null;
         return JsonDocument.Parse(baseObj.ToJsonString()).RootElement;
+    }
+
+    // ─── text parse (split a string into named tokens via a {token} pattern) ──
+
+    private static JsonElement? ExecuteTextParse(RuleNode node, FrameStack frames, GraphInfo graph, RunState run)
+    {
+        if (node.Data.Config is null) throw new InvalidOperationException($"textParse '{node.Id}' has no config");
+        var cfg = ParseConfig<TextParseConfig>(node, "textParse");
+        if (string.IsNullOrEmpty(cfg.Pattern)) throw new InvalidOperationException($"textParse '{node.Id}' missing pattern");
+
+        var sourceEl = string.IsNullOrEmpty(cfg.Source)
+            ? (JsonElement?)null
+            : ResolveFromPath(cfg.Source, run.Request, run.Ctx, frames);
+        var input = sourceEl is { ValueKind: JsonValueKind.String } s
+            ? s.GetString() ?? ""
+            : sourceEl?.ToString() ?? "";
+
+        var tokens = ParseByPattern(input, cfg.Pattern);
+
+        var baseObj = cfg.Base is { ValueKind: JsonValueKind.Object } b
+            ? JsonNode.Parse(b.GetRawText())!.AsObject()
+            : new JsonObject();
+
+        if (cfg.Map is { Count: > 0 })
+        {
+            // Explicit token → field mapping.
+            foreach (var kv in cfg.Map)
+                if (tokens.TryGetValue(kv.Key, out var val))
+                    baseObj[kv.Value] = val;
+        }
+        else
+        {
+            // No map → write each token under its own name.
+            foreach (var kv in tokens)
+                baseObj[kv.Key] = kv.Value;
+        }
+
+        return JsonDocument.Parse(baseObj.ToJsonString()).RootElement;
+    }
+
+    // Parse `input` against a friendly "{token}" pattern. The literal text
+    // between placeholders are the delimiters (no regex). The final token
+    // captures the remainder of the string.
+    private static Dictionary<string, string> ParseByPattern(string input, string pattern)
+    {
+        var tokenNames = new List<string>();
+        var literals = new List<string>();            // literal text preceding each token
+        var lit = new System.Text.StringBuilder();
+        for (int i = 0; i < pattern.Length;)
+        {
+            if (pattern[i] == '{')
+            {
+                int close = pattern.IndexOf('}', i);
+                if (close < 0) { lit.Append(pattern[i]); i++; continue; }
+                literals.Add(lit.ToString()); lit.Clear();
+                tokenNames.Add(pattern.Substring(i + 1, close - i - 1).Trim());
+                i = close + 1;
+            }
+            else { lit.Append(pattern[i]); i++; }
+        }
+        string trailing = lit.ToString();
+
+        var result = new Dictionary<string, string>();
+        int pos = 0;
+        for (int k = 0; k < tokenNames.Count; k++)
+        {
+            var before = literals[k];
+            if (before.Length > 0)
+            {
+                int idx = input.IndexOf(before, pos, System.StringComparison.Ordinal);
+                if (idx >= 0) pos = idx + before.Length;
+            }
+            string value;
+            if (k == tokenNames.Count - 1)
+            {
+                value = pos <= input.Length ? input.Substring(pos) : "";
+                if (trailing.Length > 0 && value.EndsWith(trailing, System.StringComparison.Ordinal))
+                    value = value.Substring(0, value.Length - trailing.Length);
+            }
+            else
+            {
+                var next = literals[k + 1];
+                int nextIdx = next.Length == 0 ? -1 : input.IndexOf(next, pos, System.StringComparison.Ordinal);
+                if (nextIdx >= 0) { value = input.Substring(pos, nextIdx - pos); pos = nextIdx; }
+                else { value = pos <= input.Length ? input.Substring(pos) : ""; pos = input.Length; }
+            }
+            result[tokenNames[k]] = value.Trim();
+        }
+        return result;
     }
 
     // ─── reference (multi-row lookup) ──────────────────────────────────────
@@ -2068,8 +2175,7 @@ public sealed class RuleRunner
         if (msg.StartsWith("mutator", StringComparison.Ordinal))                  return "MUTATOR_ERROR";
         if (msg.StartsWith("reference '", StringComparison.Ordinal))              return "REFERENCE_ERROR";
         if (msg.StartsWith("bucket '", StringComparison.Ordinal))                 return "BUCKET_ERROR";
-        if (msg.StartsWith("assert '", StringComparison.Ordinal))                 return "ASSERT_FAILED";
-        if (msg.StartsWith("sort '", StringComparison.Ordinal))                   return "SORT_ERROR";
+        if (msg.StartsWith("assert '", StringComparison.Ordinal))                 return "ASSERT_FAILED"; 
         if (msg.StartsWith("limit '", StringComparison.Ordinal))                  return "LIMIT_ERROR";
         if (msg.StartsWith("distinct '", StringComparison.Ordinal))               return "DISTINCT_ERROR";
         if (msg.StartsWith("switch '", StringComparison.Ordinal))                 return "SWITCH_ERROR";

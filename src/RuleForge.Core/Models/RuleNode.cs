@@ -45,6 +45,7 @@ public enum NodeCategory
     [JsonStringEnumMemberName("distinct")] Distinct,
     [JsonStringEnumMemberName("switch")] Switch,
     [JsonStringEnumMemberName("groupBy")] GroupBy,
+    [JsonStringEnumMemberName("textParse")] TextParse,
 }
 
 public sealed record SubRuleCall(

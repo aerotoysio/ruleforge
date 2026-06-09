@@ -51,25 +51,46 @@ public static class DateFilterEvaluator
                 };
             }
 
-            var tz = config.Compare.Timezone;
-            var granularity = config.Compare.Granularity;
-            var perElement = new bool[raw.Count];
-            var display = new List<string?>(raw.Count);
+            // One predicate (legacy `Compare`) or a stack of layered conditions on
+            // the same date source, combined by `Match` (all = AND, any = OR). Each
+            // condition carries its own granularity + timezone.
+            IReadOnlyList<DateFilterCompare> compares =
+                config.Conditions is { Count: > 0 } ? config.Conditions : new[] { config.Compare };
 
-            for (var i = 0; i < raw.Count; i++)
+            if (compares.Count == 1)
             {
-                var r = raw[i];
-                var parsed = r is null ? null : ParseDate(r, tz, clock);
-                display.Add(parsed is null ? r : FormatForDisplay(parsed.Value, granularity, tz));
-                perElement[i] = CompareOne(parsed, config.Compare, granularity, tz, clock);
+                var c = compares[0];
+                var tz = c.Timezone;
+                var granularity = c.Granularity;
+                var perElement = new bool[raw.Count];
+                var display = new List<string?>(raw.Count);
+                for (var i = 0; i < raw.Count; i++)
+                {
+                    var r = raw[i];
+                    var parsed = r is null ? null : ParseDate(r, tz, clock);
+                    display.Add(parsed is null ? r : FormatForDisplay(parsed.Value, granularity, tz));
+                    perElement[i] = CompareOne(parsed, c, granularity, tz, clock);
+                }
+                var ok = Reduce(perElement, config.ArraySelector);
+                var matched = perElement.Count(b => b);
+                return new(
+                    ok ? Verdict.Pass : Verdict.Fail,
+                    display,
+                    perElement,
+                    Reason: $"{matched}/{perElement.Length} elements matched ({SelectorName(config.ArraySelector)})");
             }
-            var ok = Reduce(perElement, config.ArraySelector);
-            var matched = perElement.Count(b => b);
+
+            // Each condition evaluates with its own granularity + timezone, reduced
+            // across the source's elements via ArraySelector → one bool.
+            var any = string.Equals(config.Match, "any", StringComparison.OrdinalIgnoreCase);
+            var perCondition = compares.Select(c => EvalCompare(raw, c, config.ArraySelector, clock)).ToArray();
+            var combined = any ? perCondition.Any(b => b) : perCondition.All(b => b);
+            var passedN = perCondition.Count(b => b);
             return new(
-                ok ? Verdict.Pass : Verdict.Fail,
-                display,
-                perElement,
-                Reason: $"{matched}/{perElement.Length} elements matched ({SelectorName(config.ArraySelector)})");
+                combined ? Verdict.Pass : Verdict.Fail,
+                raw,
+                null,
+                Reason: $"{passedN}/{perCondition.Length} conditions matched (match={(any ? "any" : "all")})");
         }
         catch (Exception e)
         {
@@ -78,6 +99,21 @@ public static class DateFilterEvaluator
     }
 
     // â”€â”€â”€ source â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // Evaluate one date condition (its own granularity + timezone) across the
+    // resolved source values, reduced by the array selector → a single bool.
+    private static bool EvalCompare(List<string?> raw, DateFilterCompare c, ArraySelector selector, Func<DateTimeOffset> clock)
+    {
+        var tz = c.Timezone;
+        var gran = c.Granularity;
+        var per = new bool[raw.Count];
+        for (var i = 0; i < raw.Count; i++)
+        {
+            var parsed = raw[i] is null ? null : ParseDate(raw[i]!, tz, clock);
+            per[i] = CompareOne(parsed, c, gran, tz, clock);
+        }
+        return Reduce(per, selector);
+    }
+
     private static List<string?> ResolveSource(DateFilterConfig cfg, StringFilterEvaluator.Context ctx)
     {
         var src = cfg.Source;

@@ -35,15 +35,34 @@ public static class StringFilterEvaluator
                 };
             }
 
-            var perElement = raw.Select(v => CompareOne(v, config.Compare)).ToArray();
-            var ok = Reduce(perElement, config.ArraySelector);
-            var matched = perElement.Count(b => b);
+            // One predicate (legacy `Compare`) or a stack of layered conditions on
+            // the same source, combined by `Match` (all = AND, any = OR).
+            IReadOnlyList<StringFilterCompare> compares =
+                config.Conditions is { Count: > 0 } ? config.Conditions : new[] { config.Compare };
 
+            if (compares.Count == 1)
+            {
+                var perElement = raw.Select(v => CompareOne(v, compares[0])).ToArray();
+                var ok = Reduce(perElement, config.ArraySelector);
+                var matched = perElement.Count(b => b);
+                return new(
+                    ok ? Verdict.Pass : Verdict.Fail,
+                    raw,
+                    perElement,
+                    Reason: $"{matched}/{perElement.Length} elements matched ({SelectorName(config.ArraySelector)})");
+            }
+
+            var any = string.Equals(config.Match, "any", StringComparison.OrdinalIgnoreCase);
+            var perCondition = compares
+                .Select(c => Reduce(raw.Select(v => CompareOne(v, c)).ToArray(), config.ArraySelector))
+                .ToArray();
+            var combined = any ? perCondition.Any(b => b) : perCondition.All(b => b);
+            var passed = perCondition.Count(b => b);
             return new(
-                ok ? Verdict.Pass : Verdict.Fail,
+                combined ? Verdict.Pass : Verdict.Fail,
                 raw,
-                perElement,
-                Reason: $"{matched}/{perElement.Length} elements matched ({SelectorName(config.ArraySelector)})");
+                null,
+                Reason: $"{passed}/{perCondition.Length} conditions matched (match={(any ? "any" : "all")})");
         }
         catch (Exception e)
         {

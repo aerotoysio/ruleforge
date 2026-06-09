@@ -8,7 +8,12 @@ public sealed record StringFilterConfig(
     ArraySelector ArraySelector,
     OnMissing OnMissing,
     string? ReferenceId = null,
-    string? ReferenceColumn = null);
+    string? ReferenceColumn = null,
+    // Multiple layered text conditions on the same Source, combined by Match.
+    // When null/empty the legacy single `Compare` is used (back-compatible).
+    IReadOnlyList<StringFilterCompare>? Conditions = null,
+    // "all" (AND, default) or "any" (OR) across Conditions.
+    string? Match = null);
 
 public sealed record StringFilterSource(
     SourceKind Kind,

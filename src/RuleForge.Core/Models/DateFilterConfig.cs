@@ -6,7 +6,13 @@ public sealed record DateFilterConfig(
     DateFilterSource Source,
     DateFilterCompare Compare,
     ArraySelector ArraySelector,
-    OnMissing OnMissing);
+    OnMissing OnMissing,
+    // Multiple layered date/time conditions on the same Source, combined by
+    // Match. Each condition carries its own granularity + timezone. When
+    // null/empty the legacy single `Compare` is used (back-compatible).
+    IReadOnlyList<DateFilterCompare>? Conditions = null,
+    // "all" (AND, default) or "any" (OR) across Conditions.
+    string? Match = null);
 
 public sealed record DateFilterSource(
     SourceKind Kind,
