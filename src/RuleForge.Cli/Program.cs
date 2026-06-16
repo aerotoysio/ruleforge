@@ -6,6 +6,7 @@ using RuleForge.Core.Graph;
 using RuleForge.Core.Loader;
 using RuleForge.Core.Models;
 using RuleForge.DocumentForge;
+using Microsoft.Data.Sqlite;
 
 // AERO Engine CLI â€” slice 2.
 //
@@ -40,11 +41,90 @@ return verb switch
     "bench"   => await BenchVerb(rest),
     "schemas" => SchemasVerb(rest),
     "serve"   => await ServeVerb(rest),
+    "migrate-sqlite" => MigrateSqliteVerb(rest),
     "-h" or "--help" => PrintTopLevelHelpAndOk(),
     _ => Unknown(verb),
 };
 
 static int PrintTopLevelHelpAndOk() { PrintTopLevelHelp(); return 0; }
+
+// ─── migrate-sqlite ──────────────────────────────────────────────────────────
+// One-shot bootstrap: import compiled engine rules + reference sets from the
+// file workspace into a shared SQLite workspace.db, so the Api can read rules
+// from SQLite (RULEFORGE_RULE_SOURCE=sqlite). The editor's on-save compile
+// (later phase) becomes the steady-state writer; this just seeds the db.
+static int MigrateSqliteVerb(string[] argv)
+{
+    string? fixtures = null, refs = null, db = null;
+    for (int i = 0; i < argv.Length; i++)
+    {
+        switch (argv[i])
+        {
+            case "--fixtures": fixtures = argv[++i]; break;
+            case "--refs": refs = argv[++i]; break;
+            case "--db": db = argv[++i]; break;
+            case "-h" or "--help":
+                Console.Error.WriteLine("migrate-sqlite --db <workspace.db> [--fixtures <compiled-rules-dir>] [--refs <refs-dir>]");
+                return 0;
+        }
+    }
+    if (db is null) { Console.Error.WriteLine("migrate-sqlite: --db <workspace.db> is required"); return 1; }
+
+    SqliteSchema.EnsureCreated(db);
+    using var conn = new SqliteConnection(SqliteSchema.ConnStr(db));
+    conn.Open();
+
+    int rules = 0, refsCount = 0;
+    if (fixtures is not null && Directory.Exists(fixtures))
+    {
+        foreach (var file in Directory.EnumerateFiles(fixtures, "*.json"))
+        {
+            if (Path.GetFileName(file).StartsWith('_')) continue; // skip _endpoint-bindings.json
+            var text = File.ReadAllText(file);
+            using var doc = JsonDocument.Parse(text);
+            var root = doc.RootElement;
+            if (root.ValueKind != JsonValueKind.Object || !root.TryGetProperty("id", out var idEl)) continue;
+            var id = idEl.GetString()!;
+            var version = root.TryGetProperty("currentVersion", out var cv) && cv.TryGetInt32(out var n) ? n : 1;
+            var endpoint = root.TryGetProperty("endpoint", out var ep) ? ep.GetString() ?? "" : "";
+            var method = root.TryGetProperty("method", out var m) ? m.GetString() ?? "POST" : "POST";
+            var status = root.TryGetProperty("status", out var st) ? st.GetString() : null;
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = "INSERT OR REPLACE INTO compiled_rules (id, version, endpoint, method, status, json) VALUES ($id,$v,$e,$m,$s,$j)";
+            cmd.Parameters.AddWithValue("$id", id);
+            cmd.Parameters.AddWithValue("$v", version);
+            cmd.Parameters.AddWithValue("$e", endpoint);
+            cmd.Parameters.AddWithValue("$m", method);
+            cmd.Parameters.AddWithValue("$s", (object?)status ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("$j", text);
+            cmd.ExecuteNonQuery();
+            rules++;
+        }
+    }
+    if (refs is not null && Directory.Exists(refs))
+    {
+        foreach (var file in Directory.EnumerateFiles(refs, "*.json"))
+        {
+            var text = File.ReadAllText(file);
+            using var doc = JsonDocument.Parse(text);
+            var root = doc.RootElement;
+            if (root.ValueKind != JsonValueKind.Object || !root.TryGetProperty("id", out var idEl)) continue;
+            var id = idEl.GetString()!;
+            var name = root.TryGetProperty("name", out var nm) ? nm.GetString() : null;
+            var version = root.TryGetProperty("currentVersion", out var cv) && cv.TryGetInt32(out var n) ? n : 1;
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = "INSERT OR REPLACE INTO reference_sets (id, name, version, json) VALUES ($id,$n,$v,$j)";
+            cmd.Parameters.AddWithValue("$id", id);
+            cmd.Parameters.AddWithValue("$n", (object?)name ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("$v", version);
+            cmd.Parameters.AddWithValue("$j", text);
+            cmd.ExecuteNonQuery();
+            refsCount++;
+        }
+    }
+    Console.WriteLine($"migrate-sqlite: imported {rules} rule(s) + {refsCount} reference set(s) into {Path.GetFullPath(db)}");
+    return 0;
+}
 
 static int Unknown(string verb)
 {

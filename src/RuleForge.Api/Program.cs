@@ -48,6 +48,16 @@ if (ruleSourceKind == "df")
     builder.Services.AddSingleton<IReferenceSetSource>(sp =>
         new DocumentForgeReferenceSetSource(sp.GetRequiredService<DfClient>(), prefix));
 }
+else if (ruleSourceKind == "sqlite")
+{
+    // Shared SQLite workspace.db — the editor writes it, the engine reads it.
+    var dbPath = builder.Configuration["RULEFORGE_SQLITE_PATH"]
+                 ?? Environment.GetEnvironmentVariable("RULEFORGE_SQLITE_PATH")
+                 ?? throw new InvalidOperationException("RULEFORGE_SQLITE_PATH is required when RULEFORGE_RULE_SOURCE=sqlite");
+    var full = Path.GetFullPath(dbPath);
+    builder.Services.AddSingleton<IRuleSource>(_ => new SqliteRuleSource(full));
+    builder.Services.AddSingleton<IReferenceSetSource>(_ => new SqliteReferenceSetSource(full));
+}
 else
 {
     var fixturesDir = builder.Configuration["RULEFORGE_FIXTURES_DIR"]
