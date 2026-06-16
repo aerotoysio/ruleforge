@@ -10,7 +10,12 @@ public sealed record Envelope(
     string EvaluatedAt,
     JsonElement? Result,
     IReadOnlyList<TraceEntry>? Trace = null,
-    long? DurationMs = null);
+    long? DurationMs = null,
+    // Pure DAG-evaluation time in microseconds, measured on EVERY run (unlike
+    // DurationMs, which is Debug-gated + millisecond-resolution). This is the
+    // engine's own compute time — no network, no serialization — so a demo can
+    // show "engine: 420µs" next to a client-measured round-trip.
+    long? DurationMicros = null);
 
 [JsonConverter(typeof(JsonStringEnumConverter<Decision>))]
 public enum Decision

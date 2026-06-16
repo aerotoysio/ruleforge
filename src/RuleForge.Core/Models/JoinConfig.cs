@@ -15,4 +15,5 @@ public sealed record JoinConfig(
     string As,
     string? Left = null,
     string? Right = null,
-    string? Mode = null);
+    string? Mode = null,
+    bool? OnlyMatched = null);

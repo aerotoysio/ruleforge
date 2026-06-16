@@ -56,6 +56,7 @@ public sealed class RuleRunner
         var version = rule.CurrentVersion > 0 ? rule.CurrentVersion : 1;
         var startedAtUtc = DateTimeOffset.UtcNow;
         var totalSw = options.Debug ? Stopwatch.StartNew() : null;
+        var microSw = Stopwatch.StartNew();
         var trace = options.Debug ? new List<TraceEntry>() : null;
 
         ValidateGraph(rule);
@@ -98,7 +99,7 @@ public sealed class RuleRunner
                 {
                     var msg = $"node '{node.Id}' has a subRuleCall but no SubRuleSource was configured for the run";
                     trace?.Add(new TraceEntry(node.Id, IsoUtc(nodeStarted), sw.ElapsedMilliseconds, TraceOutcome.Error, Error: msg));
-                    return new Envelope(rule.Id, version, Decision.Error, IsoUtc(startedAtUtc), null, trace, totalSw?.ElapsedMilliseconds);
+                    return new Envelope(rule.Id, version, Decision.Error, IsoUtc(startedAtUtc), null, trace, totalSw?.ElapsedMilliseconds, (long)microSw.Elapsed.TotalMicroseconds);
                 }
 
                 var subResult = await InvokeSubRuleAsync(call, request, run.Ctx, frames, options, ct);
@@ -129,7 +130,7 @@ public sealed class RuleRunner
                         trace?.Add(new TraceEntry(
                             node.Id, IsoUtc(nodeStarted), sw.ElapsedMilliseconds, TraceOutcome.Error,
                             Error: subErrMsg, SubRuleRunId: subRuleRunId, CtxRead: ctxBefore));
-                        return new Envelope(rule.Id, version, Decision.Error, IsoUtc(startedAtUtc), null, trace, totalSw?.ElapsedMilliseconds);
+                        return new Envelope(rule.Id, version, Decision.Error, IsoUtc(startedAtUtc), null, trace, totalSw?.ElapsedMilliseconds, (long)microSw.Elapsed.TotalMicroseconds);
                 }
             }
 
@@ -151,7 +152,7 @@ public sealed class RuleRunner
                 trace?.Add(new TraceEntry(
                     node.Id, IsoUtc(nodeStarted), sw.ElapsedMilliseconds, TraceOutcome.Error,
                     Error: errMsg, SubRuleRunId: subRuleRunId));
-                return new Envelope(rule.Id, version, Decision.Error, IsoUtc(startedAtUtc), null, trace, totalSw?.ElapsedMilliseconds);
+                return new Envelope(rule.Id, version, Decision.Error, IsoUtc(startedAtUtc), null, trace, totalSw?.ElapsedMilliseconds, (long)microSw.Elapsed.TotalMicroseconds);
             }
             sw.Stop();
 
@@ -185,7 +186,7 @@ public sealed class RuleRunner
             }
 
             if (verdict == Verdict.Error)
-                return new Envelope(rule.Id, version, Decision.Error, IsoUtc(startedAtUtc), null, trace, totalSw?.ElapsedMilliseconds);
+                return new Envelope(rule.Id, version, Decision.Error, IsoUtc(startedAtUtc), null, trace, totalSw?.ElapsedMilliseconds, (long)microSw.Elapsed.TotalMicroseconds);
 
             // Route outgoing edges. Iterator nodes fan out at deeper frames;
             // when an outgoing edge targets a merge, the merge runs at the
@@ -212,10 +213,10 @@ public sealed class RuleRunner
         // Output node assembly
         var outputKey = run.Key(outputNode.Id, FrameStack.Empty);
         if (!run.Fired.Contains(outputKey))
-            return new Envelope(rule.Id, version, Decision.Skip, IsoUtc(startedAtUtc), null, trace, totalSw?.ElapsedMilliseconds);
+            return new Envelope(rule.Id, version, Decision.Skip, IsoUtc(startedAtUtc), null, trace, totalSw?.ElapsedMilliseconds, (long)microSw.Elapsed.TotalMicroseconds);
 
         var result = AssembleResult(outputNode, graph, run);
-        return new Envelope(rule.Id, version, Decision.Apply, IsoUtc(startedAtUtc), result, trace, totalSw?.ElapsedMilliseconds);
+        return new Envelope(rule.Id, version, Decision.Apply, IsoUtc(startedAtUtc), result, trace, totalSw?.ElapsedMilliseconds, (long)microSw.Elapsed.TotalMicroseconds);
     }
 
     // ─── readiness ─────────────────────────────────────────────────────────
@@ -396,6 +397,9 @@ public sealed class RuleRunner
 
             case NodeCategory.Join:
                 return (Verdict.Pass, ExecuteJoin(node, frames, graph, run));
+
+            case NodeCategory.FilterList:
+                return (Verdict.Pass, ExecuteFilterList(node, frames, graph, run, options));
 
             default:
                 throw new NotSupportedException(
@@ -1389,11 +1393,13 @@ public sealed class RuleRunner
         }
 
         var first = string.Equals(cfg.Mode, "first", StringComparison.OrdinalIgnoreCase);
+        var onlyMatched = cfg.OnlyMatched == true;
         var outArr = new JsonArray();
         foreach (var l in left)
         {
             var k = JoinKeyString(leftKeyOf(l));
             var matches = byKey.TryGetValue(k, out var m) ? m : EmptyMatches;
+            if (onlyMatched && matches.Count == 0) continue;
             var obj = l.ValueKind == JsonValueKind.Object
                 ? JsonNode.Parse(l.GetRawText())!.AsObject()
                 : new JsonObject();
@@ -1421,6 +1427,69 @@ public sealed class RuleRunner
         if (!keyEl.HasValue || keyEl.Value.ValueKind == JsonValueKind.Null) return "";
         if (keyEl.Value.ValueKind == JsonValueKind.String) return keyEl.Value.GetString() ?? "";
         return keyEl.Value.GetRawText();
+    }
+
+    // ─── filter list (keep the array elements matching conditions) ─────────
+
+    private JsonElement ExecuteFilterList(RuleNode node, FrameStack frames, GraphInfo graph, RunState run, Options options)
+    {
+        if (node.Data.Config is null)
+            throw new InvalidOperationException($"filterList '{node.Id}' has no config");
+        var cfg = ParseConfig<FilterListConfig>(node, "filterList");
+        if (string.IsNullOrEmpty(cfg.Field))
+            throw new InvalidOperationException($"filterList '{node.Id}' missing field");
+
+        var elements = ReadInputArray(cfg.Source, node, frames, graph, run, "filterList");
+
+        // No conditions → pass-through (an empty filter matches everything).
+        var hasConds = cfg.Conditions.ValueKind == JsonValueKind.Array && cfg.Conditions.GetArrayLength() > 0;
+
+        var baseCtx = BuildFilterContext(run, frames);
+        var path = cfg.Field.StartsWith('$') ? cfg.Field : "$." + cfg.Field;
+
+        var keep = new JsonArray();
+        foreach (var el in elements)
+            if (!hasConds || ElementMatches(el, cfg, path, baseCtx, options))
+                keep.Add(JsonNode.Parse(el.GetRawText()));
+        return JsonDocument.Parse(keep.ToJsonString()).RootElement;
+    }
+
+    // Run one element through the matching typed filter evaluator, treating the
+    // element itself as the request root. Reuses the exact filter machinery, so
+    // a Filter-list condition behaves identically to the equivalent gate filter.
+    private static bool ElementMatches(JsonElement el, FilterListConfig cfg, string path, StringFilterEvaluator.Context baseCtx, Options options)
+    {
+        var ctx = new StringFilterEvaluator.Context(el, baseCtx.Ctx);
+        switch ((cfg.ValueType ?? "string").ToLowerInvariant())
+        {
+            case "number":
+            {
+                var compares = cfg.Conditions.Deserialize<List<NumberFilterCompare>>(ConfigJsonOptions) ?? new();
+                var fc = new NumberFilterConfig(
+                    new NumberFilterSource(SourceKind.Request, path),
+                    compares.Count > 0 ? compares[0] : new NumberFilterCompare(NumberFilterOperator.IsNull),
+                    ArraySelector.Any, OnMissing.Fail, compares, cfg.Match);
+                return NumberFilterEvaluator.Evaluate(fc, ctx).Verdict == Verdict.Pass;
+            }
+            case "date":
+            {
+                var compares = cfg.Conditions.Deserialize<List<DateFilterCompare>>(ConfigJsonOptions) ?? new();
+                var fc = new DateFilterConfig(
+                    new DateFilterSource(SourceKind.Request, path),
+                    compares.Count > 0 ? compares[0] : new DateFilterCompare(DateFilterOperator.IsNull),
+                    ArraySelector.Any, OnMissing.Fail, compares, cfg.Match);
+                return DateFilterEvaluator.Evaluate(fc, ctx, options.Clock).Verdict == Verdict.Pass;
+            }
+            default:
+            {
+                var compares = cfg.Conditions.Deserialize<List<StringFilterCompare>>(ConfigJsonOptions) ?? new();
+                var fc = new StringFilterConfig(
+                    new StringFilterSource(SourceKind.Request, path),
+                    compares.Count > 0 ? compares[0] : new StringFilterCompare(StringFilterOperator.IsNull),
+                    ArraySelector.Any, OnMissing.Fail, Conditions: compares, Match: cfg.Match);
+                return StringFilterEvaluator.Evaluate(fc, ctx).Verdict == Verdict.Pass;
+            }
+        }
     }
 
     // ─── sort / limit / distinct (array transforms) ────────────────────────

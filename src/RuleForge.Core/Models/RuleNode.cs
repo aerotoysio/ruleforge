@@ -47,6 +47,7 @@ public enum NodeCategory
     [JsonStringEnumMemberName("groupBy")] GroupBy,
     [JsonStringEnumMemberName("textParse")] TextParse,
     [JsonStringEnumMemberName("join")] Join,
+    [JsonStringEnumMemberName("filterList")] FilterList,
 }
 
 public sealed record SubRuleCall(
