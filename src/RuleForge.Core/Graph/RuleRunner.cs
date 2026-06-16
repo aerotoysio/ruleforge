@@ -394,6 +394,9 @@ public sealed class RuleRunner
             case NodeCategory.GroupBy:
                 return (Verdict.Pass, ExecuteGroupBy(node, frames, graph, run));
 
+            case NodeCategory.Join:
+                return (Verdict.Pass, ExecuteJoin(node, frames, graph, run));
+
             default:
                 throw new NotSupportedException(
                     $"node category '{node.Data.Category}' is not implemented (node {node.Id})");
@@ -1355,6 +1358,69 @@ public sealed class RuleRunner
             obj[k] = arr;
         }
         return JsonDocument.Parse(obj.ToJsonString()).RootElement;
+    }
+
+    // ─── join (enrich one array with matches from another by key) ──────────
+
+    private static readonly List<JsonElement> EmptyMatches = new();
+
+    private static JsonElement ExecuteJoin(RuleNode node, FrameStack frames, GraphInfo graph, RunState run)
+    {
+        if (node.Data.Config is null)
+            throw new InvalidOperationException($"join '{node.Id}' has no config");
+        var cfg = ParseConfig<JoinConfig>(node, "join");
+        if (string.IsNullOrEmpty(cfg.LeftKey)) throw new InvalidOperationException($"join '{node.Id}' missing leftKey");
+        if (string.IsNullOrEmpty(cfg.RightKey)) throw new InvalidOperationException($"join '{node.Id}' missing rightKey");
+        if (string.IsNullOrEmpty(cfg.As)) throw new InvalidOperationException($"join '{node.Id}' missing 'as'");
+
+        var left = ReadInputArray(cfg.Left, node, frames, graph, run, "join");
+        var right = ReadInputArray(cfg.Right, node, frames, graph, run, "join");
+
+        var leftKeyOf = MakeKeyExtractor(NormalizeKeyPath(cfg.LeftKey));
+        var rightKeyOf = MakeKeyExtractor(NormalizeKeyPath(cfg.RightKey));
+
+        // Index the right array by its join key (preserving first-seen order).
+        var byKey = new Dictionary<string, List<JsonElement>>(StringComparer.Ordinal);
+        foreach (var r in right)
+        {
+            var k = JoinKeyString(rightKeyOf(r));
+            if (!byKey.TryGetValue(k, out var list)) { list = new List<JsonElement>(); byKey[k] = list; }
+            list.Add(r);
+        }
+
+        var first = string.Equals(cfg.Mode, "first", StringComparison.OrdinalIgnoreCase);
+        var outArr = new JsonArray();
+        foreach (var l in left)
+        {
+            var k = JoinKeyString(leftKeyOf(l));
+            var matches = byKey.TryGetValue(k, out var m) ? m : EmptyMatches;
+            var obj = l.ValueKind == JsonValueKind.Object
+                ? JsonNode.Parse(l.GetRawText())!.AsObject()
+                : new JsonObject();
+            if (first)
+            {
+                obj[cfg.As] = matches.Count > 0 ? JsonNode.Parse(matches[0].GetRawText()) : null;
+            }
+            else
+            {
+                var arr = new JsonArray();
+                foreach (var x in matches) arr.Add(JsonNode.Parse(x.GetRawText()));
+                obj[cfg.As] = arr;
+            }
+            outArr.Add(obj);
+        }
+        return JsonDocument.Parse(outArr.ToJsonString()).RootElement;
+    }
+
+    // A bare field name ("id") is element-relative; normalise to a JSONPath.
+    private static string NormalizeKeyPath(string key) =>
+        key.StartsWith('$') || key == "self" ? key : "$." + key;
+
+    private static string JoinKeyString(JsonElement? keyEl)
+    {
+        if (!keyEl.HasValue || keyEl.Value.ValueKind == JsonValueKind.Null) return "";
+        if (keyEl.Value.ValueKind == JsonValueKind.String) return keyEl.Value.GetString() ?? "";
+        return keyEl.Value.GetRawText();
     }
 
     // ─── sort / limit / distinct (array transforms) ────────────────────────
