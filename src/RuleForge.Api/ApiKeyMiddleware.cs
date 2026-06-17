@@ -25,17 +25,30 @@ public sealed class ApiKeyMiddleware
 
     private readonly RequestDelegate _next;
     private readonly string? _expected;
+    private readonly IApiKeyValidator _validator;
 
-    public ApiKeyMiddleware(RequestDelegate next, IConfiguration config)
+    public ApiKeyMiddleware(RequestDelegate next, IConfiguration config, IApiKeyValidator validator)
     {
         _next = next;
         _expected = config["RULEFORGE_API_KEY"]
                     ?? Environment.GetEnvironmentVariable("RULEFORGE_API_KEY");
+        _validator = validator;
     }
 
     public async Task InvokeAsync(HttpContext http)
     {
-        if (string.IsNullOrEmpty(_expected) || BypassPaths.Contains(http.Request.Path))
+        if (BypassPaths.Contains(http.Request.Path))
+        {
+            await _next(http);
+            return;
+        }
+
+        var hasEnvKey = !string.IsNullOrEmpty(_expected);
+
+        // Enforcement is OFF only when there's no env master key AND no minted
+        // DB key — the local-dev default. The moment either exists, a valid
+        // X-AERO-Key is required.
+        if (!hasEnvKey && !_validator.HasAnyKeys())
         {
             await _next(http);
             return;
@@ -45,9 +58,12 @@ public sealed class ApiKeyMiddleware
         // header is present / right-length. TryReadKey returns "" on miss,
         // and FixedTimeEquals pads to expected length internally — so an
         // attacker can no longer probe by timing whether they have the
-        // right header name or the right key length.
+        // right header name or the right key length. IsValid hashes the
+        // supplied key with SHA-256 and matches it against the editor-minted
+        // keys in workspace.db.
         TryReadKey(http.Request, out var supplied);
-        if (FixedTimeEquals(supplied, _expected))
+        var ok = (hasEnvKey && FixedTimeEquals(supplied, _expected!)) || _validator.IsValid(supplied);
+        if (ok)
         {
             await _next(http);
             return;

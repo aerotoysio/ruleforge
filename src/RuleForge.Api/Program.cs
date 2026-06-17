@@ -1,4 +1,5 @@
 ﻿using System.Text.Json;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using RuleForge.Api;
 using RuleForge.Core;
 using RuleForge.Core.Graph;
@@ -57,6 +58,9 @@ else if (ruleSourceKind == "sqlite")
     var full = Path.GetFullPath(dbPath);
     builder.Services.AddSingleton<IRuleSource>(_ => new SqliteRuleSource(full));
     builder.Services.AddSingleton<IReferenceSetSource>(_ => new SqliteReferenceSetSource(full));
+    // Engine half of the "gold sync": validate X-AERO-Key against the keys the
+    // editor mints into this same workspace.db (api_keys table).
+    builder.Services.AddSingleton<IApiKeyValidator>(_ => new SqliteApiKeyValidator(full));
 }
 else
 {
@@ -77,6 +81,12 @@ else
 builder.Services.AddSingleton(new HttpClient { Timeout = Timeout.InfiniteTimeSpan });
 
 builder.Services.AddSingleton<RuleRunner>();
+
+// API-key validation source. The sqlite branch above registers a real
+// SqliteApiKeyValidator; everywhere else there are no DB-managed keys, so fall
+// back to the env-only validator (no DB keys → enforcement driven by the env
+// master key alone, preserving prior behaviour for df/local sources).
+builder.Services.TryAddSingleton<IApiKeyValidator, NullApiKeyValidator>();
 
 // CORS for local browser-based demos (e.g. the insurance-demo HTML pages
 // calling the engine from another origin/port). The policy is only wired into
