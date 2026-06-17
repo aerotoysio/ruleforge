@@ -62,6 +62,25 @@ else if (ruleSourceKind == "sqlite")
     // editor mints into this same workspace.db (api_keys table).
     builder.Services.AddSingleton<IApiKeyValidator>(_ => new SqliteApiKeyValidator(full));
 }
+else if (ruleSourceKind == "sync")
+{
+    // Data-plane replica: pull rules / reference sets / active api-keys from the
+    // control plane's HTTP sync API into a LOCAL SQLite file, then serve from it
+    // (see ARCHITECTURE.md). The request hot path stays local; the network is
+    // touched only at boot and on POST /admin/refresh.
+    var localPath = builder.Configuration["RULEFORGE_SQLITE_PATH"]
+                    ?? Environment.GetEnvironmentVariable("RULEFORGE_SQLITE_PATH")
+                    ?? throw new InvalidOperationException("RULEFORGE_SQLITE_PATH (local replica path) is required when RULEFORGE_RULE_SOURCE=sync");
+    var syncUrl = builder.Configuration["RULEFORGE_SYNC_URL"]
+                  ?? Environment.GetEnvironmentVariable("RULEFORGE_SYNC_URL")
+                  ?? throw new InvalidOperationException("RULEFORGE_SYNC_URL is required when RULEFORGE_RULE_SOURCE=sync");
+    var syncToken = builder.Configuration["RULEFORGE_SYNC_TOKEN"]
+                    ?? Environment.GetEnvironmentVariable("RULEFORGE_SYNC_TOKEN");
+    var full = Path.GetFullPath(localPath);
+    builder.Services.AddSingleton<IRuleSource>(new RemoteSyncRuleSource(full, syncUrl, syncToken));
+    builder.Services.AddSingleton<IReferenceSetSource>(_ => new SqliteReferenceSetSource(full));
+    builder.Services.AddSingleton<IApiKeyValidator>(_ => new SqliteApiKeyValidator(full));
+}
 else
 {
     var fixturesDir = builder.Configuration["RULEFORGE_FIXTURES_DIR"]
