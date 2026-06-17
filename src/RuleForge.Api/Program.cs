@@ -107,6 +107,10 @@ builder.Services.AddSingleton<RuleRunner>();
 // master key alone, preserving prior behaviour for df/local sources).
 builder.Services.TryAddSingleton<IApiKeyValidator, NullApiKeyValidator>();
 
+// Fleet heartbeat — self-registers this engine with the control plane when
+// RULEFORGE_CONTROL_URL is set (no-op otherwise).
+builder.Services.AddHostedService<HeartbeatService>();
+
 // CORS for local browser-based demos (e.g. the insurance-demo HTML pages
 // calling the engine from another origin/port). The policy is only wired into
 // the pipeline when running in Development (see below) — production behaviour

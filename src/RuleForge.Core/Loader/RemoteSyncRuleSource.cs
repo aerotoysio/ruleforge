@@ -44,6 +44,9 @@ public sealed class RemoteSyncRuleSource : IRuleSource, IDisposable
     public Task<IReadOnlyList<RuleBinding>> ListBindingsAsync(CancellationToken ct = default)
         => _inner.ListBindingsAsync(ct);
 
+    /// <summary>The sync generation this engine has pulled — surfaced in the fleet heartbeat.</summary>
+    public string LastGeneration => _sync.LastGeneration;
+
     public void Dispose() => _sync.Dispose();
 }
 
@@ -61,6 +64,9 @@ public sealed class RuleForgeSyncClient : IDisposable
     private readonly string _base;
     private readonly string _connStr;
     private string _lastGeneration = "";
+
+    /// <summary>The manifest generation last successfully synced (for heartbeat freshness).</summary>
+    public string LastGeneration => _lastGeneration;
 
     public RuleForgeSyncClient(string localDbPath, string baseUrl, string? token)
     {
