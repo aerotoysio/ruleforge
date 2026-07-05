@@ -5,7 +5,7 @@
         xmlns:nodify="clr-namespace:Nodify;assembly=Nodify"
         xmlns:vm="clr-namespace:RuleForge.Studio.ViewModels"
         xmlns:conv="clr-namespace:RuleForge.Studio.Converters"
-        Title="RuleForge Studio" Height="780" Width="1280"
+        Title="RuleForge Studio" Height="800" Width="1320"
         WindowStartupLocation="CenterScreen"
         Icon="Assets/ruleforge.ico"
         Background="#FFF3F4F6"
@@ -13,9 +13,8 @@
     <Window.Resources>
         <conv:BoolToVisibilityConverter x:Key="BoolToVis"/>
         <conv:InverseBoolToVisibilityConverter x:Key="InverseBoolToVis"/>
-        <conv:NullToVisibilityConverter x:Key="NullToVis"/>
 
-        <!-- ===== Object Explorer tree templates (auto-applied by data type) ===== -->
+        <!-- ===== Object Explorer tree templates ===== -->
         <HierarchicalDataTemplate DataType="{x:Type vm:ConnectionNodeViewModel}" ItemsSource="{Binding Children}">
             <StackPanel Orientation="Horizontal">
                 <TextBlock Text="{Binding Glyph}" Foreground="#FF4F46E5" Margin="0,0,6,0"/>
@@ -44,27 +43,28 @@
             <TextBlock Text="{Binding Name}" FontStyle="Italic" Foreground="#FF94A3B8"/>
         </DataTemplate>
 
-        <!-- ===== Nodify node card ===== -->
+        <!-- ===== Nodify node (connectors + typed outputs) ===== -->
         <DataTemplate x:Key="NodeTemplate" DataType="{x:Type vm:NodeViewModel}">
-            <Border Width="172" Height="68" CornerRadius="6" Background="White"
-                    BorderBrush="#FFE2E8F0" BorderThickness="1" SnapsToDevicePixels="True">
-                <Border.Effect>
-                    <DropShadowEffect Color="#FF94A3B8" BlurRadius="8" ShadowDepth="1" Opacity="0.35"/>
-                </Border.Effect>
-                <Grid>
-                    <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="*"/>
-                    </Grid.RowDefinitions>
-                    <Border Grid.Row="0" CornerRadius="6,6,0,0" Background="{Binding AccentBrush}" Padding="8,3">
-                        <TextBlock Text="{Binding CategoryLabel}" Foreground="White"
-                                   FontSize="10.5" FontWeight="SemiBold"/>
-                    </Border>
-                    <TextBlock Grid.Row="1" Text="{Binding Title}" Margin="9,5,9,5"
-                               VerticalAlignment="Center" TextTrimming="CharacterEllipsis"
-                               TextWrapping="Wrap" MaxHeight="34" Foreground="#FF1F2937" FontSize="12.5"/>
-                </Grid>
-            </Border>
+            <nodify:Node Header="{Binding CategoryLabel}" HeaderBrush="{Binding AccentBrush}"
+                         Input="{Binding Inputs}" Output="{Binding Outputs}"
+                         ToolTip="Double-click to edit · drag a connector to link">
+                <nodify:Node.InputConnectorTemplate>
+                    <DataTemplate>
+                        <nodify:NodeInput Header="{Binding Title}"
+                                          Anchor="{Binding Anchor, Mode=OneWayToSource}"
+                                          IsConnected="{Binding IsConnected}"/>
+                    </DataTemplate>
+                </nodify:Node.InputConnectorTemplate>
+                <nodify:Node.OutputConnectorTemplate>
+                    <DataTemplate>
+                        <nodify:NodeOutput Header="{Binding Title}"
+                                           Anchor="{Binding Anchor, Mode=OneWayToSource}"
+                                           IsConnected="{Binding IsConnected}"/>
+                    </DataTemplate>
+                </nodify:Node.OutputConnectorTemplate>
+                <TextBlock Text="{Binding Title}" Foreground="#FF1F2937" FontSize="12.5"
+                           TextTrimming="CharacterEllipsis" MaxWidth="150"/>
+            </nodify:Node>
         </DataTemplate>
 
         <Style x:Key="NodeContainerStyle" TargetType="nodify:ItemContainer">
@@ -73,7 +73,7 @@
         </Style>
 
         <DataTemplate x:Key="ConnectionTemplate" DataType="{x:Type vm:ConnectionViewModel}">
-            <nodify:LineConnection Source="{Binding Source}" Target="{Binding Target}"
+            <nodify:LineConnection Source="{Binding Source.Anchor}" Target="{Binding Target.Anchor}"
                                    Stroke="{Binding Stroke}" StrokeThickness="2"/>
         </DataTemplate>
     </Window.Resources>
@@ -93,19 +93,17 @@
 
         <StatusBar DockPanel.Dock="Bottom" Background="#FFE5E7EB">
             <StatusBarItem Content="{Binding RuleHeader}"/>
-            <StatusBarItem HorizontalAlignment="Right" Content="RuleForge Studio v0.9.0 · Phase 1"/>
+            <StatusBarItem HorizontalAlignment="Right" Content="RuleForge Studio v0.9.0 · Phase 2"/>
         </StatusBar>
 
         <avalonDock:DockingManager x:Name="Dock">
             <avalonDock:LayoutRoot>
                 <avalonDock:LayoutPanel Orientation="Horizontal">
 
-                    <avalonDock:LayoutAnchorablePane DockWidth="280">
+                    <avalonDock:LayoutAnchorablePane DockWidth="270">
                         <avalonDock:LayoutAnchorable Title="Object Explorer" CanClose="False" CanHide="False">
-                            <TreeView x:Name="ExplorerTree" Margin="4" BorderThickness="0"
-                                      Background="Transparent"
-                                      ItemsSource="{Binding ExplorerRoots}"
-                                      SelectedItemChanged="OnTreeSelected">
+                            <TreeView x:Name="ExplorerTree" Margin="4" BorderThickness="0" Background="Transparent"
+                                      ItemsSource="{Binding ExplorerRoots}" SelectedItemChanged="OnTreeSelected">
                                 <TreeView.ItemContainerStyle>
                                     <Style TargetType="TreeViewItem">
                                         <Setter Property="IsExpanded" Value="{Binding IsExpanded, Mode=TwoWay}"/>
@@ -124,77 +122,79 @@
                                     <Grid.RowDefinitions>
                                         <RowDefinition Height="Auto"/>
                                         <RowDefinition Height="*"/>
-                                        <RowDefinition Height="Auto"/>
                                     </Grid.RowDefinitions>
 
-                                    <!-- Toolbar (rules only) -->
                                     <Border Grid.Row="0" Background="#FFEFF2F6" BorderBrush="#FFE2E8F0"
                                             BorderThickness="0,0,0,1" Padding="8,5"
                                             Visibility="{Binding ShowReferenceView, Converter={StaticResource InverseBoolToVis}}">
                                         <StackPanel Orientation="Horizontal">
                                             <Button Content="＋ Add filter" Command="{Binding AddFilterCommand}"
                                                     Padding="10,3" Background="White" BorderBrush="#FFCBD5E1" Cursor="Hand"/>
-                                            <TextBlock Text="Select a filter node to edit it below."
+                                            <TextBlock Text="Double-click a node to edit · drag a connector to link · drag from the Toolbox to add"
                                                        Foreground="#FF94A3B8" VerticalAlignment="Center"
                                                        Margin="12,0,0,0" FontSize="11.5"/>
                                         </StackPanel>
                                     </Border>
 
-                                    <!-- Rule designer -->
                                     <Border Grid.Row="1" Background="#FFFBFBFD"
                                             Visibility="{Binding ShowReferenceView, Converter={StaticResource InverseBoolToVis}}">
                                         <nodify:NodifyEditor x:Name="Editor"
                                                              ItemsSource="{Binding Graph.Nodes}"
                                                              Connections="{Binding Graph.Connections}"
+                                                             PendingConnection="{Binding Graph.PendingConnection}"
                                                              ItemTemplate="{StaticResource NodeTemplate}"
                                                              ItemContainerStyle="{StaticResource NodeContainerStyle}"
                                                              ConnectionTemplate="{StaticResource ConnectionTemplate}"
-                                                             GridCellSize="16"
-                                                             Background="#FFFBFBFD"/>
+                                                             GridCellSize="16" Background="#FFFBFBFD"
+                                                             AllowDrop="True" Drop="OnEditorDrop" DragOver="OnEditorDragOver"
+                                                             PreviewMouseLeftButtonDown="OnEditorPreviewMouseDown">
+                                            <nodify:NodifyEditor.PendingConnectionTemplate>
+                                                <DataTemplate DataType="{x:Type vm:PendingConnectionViewModel}">
+                                                    <nodify:PendingConnection Source="{Binding Source}"
+                                                                              StartedCommand="{Binding StartCommand}"
+                                                                              CompletedCommand="{Binding FinishCommand}"
+                                                                              AllowOnlyConnectors="True"/>
+                                                </DataTemplate>
+                                            </nodify:NodifyEditor.PendingConnectionTemplate>
+                                        </nodify:NodifyEditor>
                                     </Border>
-                                    <!-- Datasource (reference-set) grid -->
+
                                     <DockPanel Grid.Row="1" Background="White"
                                                Visibility="{Binding ShowReferenceView, Converter={StaticResource BoolToVis}}">
                                         <Border DockPanel.Dock="Top" Background="#FFF1F5F9" Padding="12,8"
                                                 BorderBrush="#FFE2E8F0" BorderThickness="0,0,0,1">
-                                            <TextBlock Text="{Binding ReferenceTitle}" FontWeight="SemiBold"
-                                                       Foreground="#FF334155"/>
+                                            <TextBlock Text="{Binding ReferenceTitle}" FontWeight="SemiBold" Foreground="#FF334155"/>
                                         </Border>
                                         <DataGrid ItemsSource="{Binding ReferenceData}" IsReadOnly="True"
                                                   AutoGenerateColumns="True" HeadersVisibility="Column"
                                                   GridLinesVisibility="Horizontal" BorderThickness="0"
                                                   RowBackground="White" AlternatingRowBackground="#FFF8FAFC"
-                                                  Background="White" FontSize="12"
-                                                  HorizontalGridLinesBrush="#FFEDF0F4"/>
+                                                  Background="White" FontSize="12" HorizontalGridLinesBrush="#FFEDF0F4"/>
                                     </DockPanel>
-
-                                    <!-- Schema-aware filter inspector -->
-                                    <Border Grid.Row="2" Background="#FFF8FAFC" BorderBrush="#FFE2E8F0"
-                                            BorderThickness="0,1,0,0" Padding="10,8"
-                                            Visibility="{Binding Inspector, Converter={StaticResource NullToVis}}">
-                                        <WrapPanel DataContext="{Binding Inspector}">
-                                            <TextBlock Text="Filter · request field:" VerticalAlignment="Center"
-                                                       Foreground="#FF334155" FontWeight="SemiBold"/>
-                                            <ComboBox ItemsSource="{Binding Fields}" SelectedItem="{Binding SelectedField}"
-                                                      DisplayMemberPath="Display" Width="235" Margin="8,0,0,0"/>
-                                            <TextBlock Text="operator" VerticalAlignment="Center"
-                                                       Foreground="#FF334155" Margin="14,0,0,0"/>
-                                            <ComboBox ItemsSource="{Binding Operators}" SelectedItem="{Binding Operator}"
-                                                      Width="130" Margin="8,0,0,0"/>
-                                            <TextBlock Text="value" VerticalAlignment="Center"
-                                                       Foreground="#FF334155" Margin="14,0,0,0"/>
-                                            <TextBox Text="{Binding Value, UpdateSourceTrigger=PropertyChanged}"
-                                                     IsEnabled="{Binding ValueEnabled}" Width="170" Margin="8,0,0,0"
-                                                     VerticalContentAlignment="Center" BorderBrush="#FFCBD5E1"/>
-                                            <Button Content="Apply &amp; run" Margin="14,0,0,0" Padding="12,4"
-                                                    Background="#FF2563EB" Foreground="White" BorderThickness="0" Cursor="Hand"
-                                                    Command="{Binding DataContext.ApplyFilterCommand, RelativeSource={RelativeSource AncestorType=Window}}"/>
-                                        </WrapPanel>
-                                    </Border>
                                 </Grid>
                             </avalonDock:LayoutDocument>
                         </avalonDock:LayoutDocumentPane>
                     </avalonDock:LayoutDocumentPaneGroup>
+
+                    <avalonDock:LayoutAnchorablePane DockWidth="150">
+                        <avalonDock:LayoutAnchorable Title="Toolbox" CanClose="False" CanHide="False">
+                            <ItemsControl ItemsSource="{Binding Toolbox}" Margin="6">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <Border Margin="0,3" Padding="8,6" CornerRadius="5" Background="White"
+                                                BorderBrush="#FFE2E8F0" BorderThickness="1" Cursor="Hand"
+                                                MouseMove="OnToolboxItemMouseMove" ToolTip="Drag onto the canvas">
+                                            <StackPanel Orientation="Horizontal">
+                                                <Border Width="11" Height="11" CornerRadius="2"
+                                                        Background="{Binding Color}" Margin="0,0,8,0"/>
+                                                <TextBlock Text="{Binding Name}" Foreground="#FF1F2937"/>
+                                            </StackPanel>
+                                        </Border>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </avalonDock:LayoutAnchorable>
+                    </avalonDock:LayoutAnchorablePane>
 
                     <avalonDock:LayoutAnchorablePane DockWidth="360">
                         <avalonDock:LayoutAnchorable Title="Test Harness" CanClose="False" CanHide="False">

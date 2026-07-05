@@ -1,89 +1,125 @@
 using System.Collections.ObjectModel;
-using System.ComponentModel;
 using System.Windows;
 using System.Windows.Media;
 using CommunityToolkit.Mvvm.ComponentModel;
+using CommunityToolkit.Mvvm.Input;
 using RuleForge.Core.Models;
 
 namespace RuleForge.Studio.ViewModels;
 
-/// <summary>A node on the Nodify canvas, projected from a <see cref="RuleNode"/>.</summary>
+public enum ConnectorKind { Input, Pass, Fail, Default }
+
+/// <summary>A connection point on a node. Nodify writes <see cref="Anchor"/> as the node moves.</summary>
+public sealed partial class ConnectorViewModel : ObservableObject
+{
+    [ObservableProperty] private Point _anchor;
+    [ObservableProperty] private bool _isConnected;
+
+    public required string Title { get; init; }
+    public required ConnectorKind Kind { get; init; }
+    public required NodeViewModel Node { get; init; }
+
+    public bool IsInput => Kind == ConnectorKind.Input;
+
+    /// <summary>The edge branch this output represents (null for inputs).</summary>
+    public EdgeBranch? Branch => Kind switch
+    {
+        ConnectorKind.Pass => EdgeBranch.Pass,
+        ConnectorKind.Fail => EdgeBranch.Fail,
+        ConnectorKind.Default => EdgeBranch.Default,
+        _ => null,
+    };
+}
+
+/// <summary>A node on the canvas, projected from a <see cref="RuleNode"/>.</summary>
 public sealed partial class NodeViewModel : ObservableObject
 {
     [ObservableProperty] private Point _location;
     [ObservableProperty] private bool _isSelected;
 
-    public string Id { get; init; } = "";
-    public string Title { get; init; } = "";
-    public string CategoryLabel { get; init; } = "";
-    public Brush AccentBrush { get; init; } = Brushes.SlateGray;
+    public required string Id { get; init; }
+    public required string Title { get; init; }
+    public required string CategoryLabel { get; init; }
+    public required NodeCategory Category { get; init; }
+    public required Brush AccentBrush { get; init; }
 
-    /// <summary>Anchor points used to draw connections (approximated from node box geometry).</summary>
-    public Point OutputAnchor => new(Location.X + NodeWidth, Location.Y + NodeHeight / 2);
-    public Point InputAnchor => new(Location.X, Location.Y + NodeHeight / 2);
+    public ObservableCollection<ConnectorViewModel> Inputs { get; } = new();
+    public ObservableCollection<ConnectorViewModel> Outputs { get; } = new();
+}
 
-    public const double NodeWidth = 172;
-    public const double NodeHeight = 68;
+/// <summary>An edge on the canvas between an output connector and an input connector.</summary>
+public sealed class ConnectionViewModel
+{
+    public required ConnectorViewModel Source { get; init; }
+    public required ConnectorViewModel Target { get; init; }
+    public required Brush Stroke { get; init; }
+}
 
-    // Keep connection anchors in sync when the node is dragged.
-    partial void OnLocationChanged(Point value)
+/// <summary>Drives the rubber-band connection the user drags between connectors.</summary>
+public sealed partial class PendingConnectionViewModel : ObservableObject
+{
+    private readonly GraphViewModel _graph;
+    [ObservableProperty] private ConnectorViewModel? _source;
+
+    public PendingConnectionViewModel(GraphViewModel graph) => _graph = graph;
+
+    [RelayCommand]
+    private void Start(ConnectorViewModel source) => Source = source;
+
+    [RelayCommand]
+    private void Finish(ConnectorViewModel? target)
     {
-        OnPropertyChanged(nameof(OutputAnchor));
-        OnPropertyChanged(nameof(InputAnchor));
+        if (Source is not null && target is not null)
+            _graph.RequestConnect(Source, target);
+        Source = null;
     }
 }
 
 /// <summary>
-/// A directed edge on the canvas, projected from a <see cref="RuleEdge"/>. Its endpoints are
-/// derived live from the connected nodes so dragging a node moves the wire with it.
+/// The editable canvas model. Built from a <see cref="Rule"/>; structural edits (connect /
+/// disconnect) are raised as events so the owning MainViewModel folds them back into the rule
+/// (the single source of truth) and re-evaluates.
 /// </summary>
-public sealed partial class ConnectionViewModel : ObservableObject
-{
-    private readonly NodeViewModel _sourceNode;
-    private readonly NodeViewModel _targetNode;
-
-    public ConnectionViewModel(NodeViewModel source, NodeViewModel target)
-    {
-        _sourceNode = source;
-        _targetNode = target;
-        _sourceNode.PropertyChanged += OnEndpointChanged;
-        _targetNode.PropertyChanged += OnEndpointChanged;
-    }
-
-    public string Id { get; init; } = "";
-    public Brush Stroke { get; init; } = Brushes.Gray;
-    public string? BranchLabel { get; init; }
-
-    public Point Source => _sourceNode.OutputAnchor;
-    public Point Target => _targetNode.InputAnchor;
-
-    private void OnEndpointChanged(object? sender, PropertyChangedEventArgs e)
-    {
-        if (e.PropertyName is nameof(NodeViewModel.OutputAnchor)
-            or nameof(NodeViewModel.InputAnchor)
-            or nameof(NodeViewModel.Location))
-        {
-            OnPropertyChanged(nameof(Source));
-            OnPropertyChanged(nameof(Target));
-        }
-    }
-}
-
-/// <summary>The whole graph the Nodify editor binds to.</summary>
-public sealed class RuleGraphViewModel
+public sealed class GraphViewModel
 {
     public ObservableCollection<NodeViewModel> Nodes { get; } = new();
     public ObservableCollection<ConnectionViewModel> Connections { get; } = new();
+    public PendingConnectionViewModel PendingConnection { get; }
 
-    /// <summary>Project an engine <see cref="Rule"/> into canvas view-models (light palette).</summary>
-    public static RuleGraphViewModel FromRule(Rule rule)
+    /// <summary>Raised when the user draws an edge (output connector → input connector).</summary>
+    public event Action<ConnectorViewModel, ConnectorViewModel>? ConnectRequested;
+    /// <summary>Raised when the user disconnects an edge.</summary>
+    public event Action<ConnectionViewModel>? DisconnectRequested;
+
+    public GraphViewModel() => PendingConnection = new PendingConnectionViewModel(this);
+
+    public void RequestConnect(ConnectorViewModel a, ConnectorViewModel b)
     {
-        var graph = new RuleGraphViewModel();
+        var output = a.IsInput ? (b.IsInput ? null : b) : a;
+        var input = a.IsInput ? a : (b.IsInput ? b : null);
+        if (output is null || input is null || ReferenceEquals(output.Node, input.Node)) return;
+        ConnectRequested?.Invoke(output, input);
+    }
 
-        // Normalise positions so the graph starts near the top-left of the canvas.
-        var minX = rule.Nodes.Count > 0 ? rule.Nodes.Min(n => n.Position.X) : 0;
-        var minY = rule.Nodes.Count > 0 ? rule.Nodes.Min(n => n.Position.Y) : 0;
-        const double pad = 48;
+    public void RequestDisconnect(ConnectionViewModel connection) => DisconnectRequested?.Invoke(connection);
+
+    public static Brush BranchBrush(EdgeBranch? b)
+    {
+        var hex = b switch
+        {
+            EdgeBranch.Pass => "#16A34A",
+            EdgeBranch.Fail => "#DC2626",
+            _ => "#94A3B8",
+        };
+        var brush = new SolidColorBrush((Color)ColorConverter.ConvertFromString(hex));
+        brush.Freeze();
+        return brush;
+    }
+
+    /// <summary>Project an engine <see cref="Rule"/> into the connector-based canvas model.</summary>
+    public static GraphViewModel FromRule(Rule rule)
+    {
+        var graph = new GraphViewModel();
 
         var byId = new Dictionary<string, NodeViewModel>();
         foreach (var n in rule.Nodes)
@@ -93,9 +129,11 @@ public sealed class RuleGraphViewModel
                 Id = n.Id,
                 Title = string.IsNullOrWhiteSpace(n.Data.Label) ? n.Id : n.Data.Label,
                 CategoryLabel = CategoryLabel(n.Data.Category),
+                Category = n.Data.Category,
                 AccentBrush = AccentFor(n.Data.Category),
-                Location = new Point(n.Position.X - minX + pad, n.Position.Y - minY + pad),
+                Location = new Point(n.Position.X, n.Position.Y),
             };
+            AddConnectors(vm);
             graph.Nodes.Add(vm);
             byId[n.Id] = vm;
         }
@@ -104,16 +142,40 @@ public sealed class RuleGraphViewModel
         {
             if (!byId.TryGetValue(e.Source, out var s) || !byId.TryGetValue(e.Target, out var t))
                 continue;
+            var output = OutputFor(s, e.Branch);
+            var input = t.Inputs.FirstOrDefault();
+            if (output is null || input is null) continue;
 
-            graph.Connections.Add(new ConnectionViewModel(s, t)
-            {
-                Id = e.Id,
-                Stroke = BranchBrush(e.Branch),
-                BranchLabel = e.Branch?.ToString().ToLowerInvariant(),
-            });
+            output.IsConnected = true;
+            input.IsConnected = true;
+            graph.Connections.Add(new ConnectionViewModel { Source = output, Target = input, Stroke = BranchBrush(e.Branch) });
         }
 
         return graph;
+    }
+
+    private static ConnectorViewModel? OutputFor(NodeViewModel node, EdgeBranch? branch)
+        => node.Outputs.FirstOrDefault(o => o.Branch == branch) ?? node.Outputs.FirstOrDefault();
+
+    private static void AddConnectors(NodeViewModel vm)
+    {
+        if (vm.Category != NodeCategory.Input)
+            vm.Inputs.Add(new ConnectorViewModel { Title = "in", Kind = ConnectorKind.Input, Node = vm });
+
+        switch (vm.Category)
+        {
+            case NodeCategory.Output:
+                break; // sink — no outputs
+            case NodeCategory.Filter:
+            case NodeCategory.Logic:
+            case NodeCategory.Assert:
+                vm.Outputs.Add(new ConnectorViewModel { Title = "pass", Kind = ConnectorKind.Pass, Node = vm });
+                vm.Outputs.Add(new ConnectorViewModel { Title = "fail", Kind = ConnectorKind.Fail, Node = vm });
+                break;
+            default:
+                vm.Outputs.Add(new ConnectorViewModel { Title = "out", Kind = ConnectorKind.Default, Node = vm });
+                break;
+        }
     }
 
     private static string CategoryLabel(NodeCategory c) => c switch
@@ -125,39 +187,22 @@ public sealed class RuleGraphViewModel
         _ => c.ToString().ToLowerInvariant(),
     };
 
-    // Light, muted category accents — final palette is a Phase-2 review item.
     private static Brush AccentFor(NodeCategory c)
     {
         var hex = c switch
         {
-            NodeCategory.Input or NodeCategory.Output => "#64748B", // slate
-            NodeCategory.Filter or NodeCategory.FilterList => "#2563EB", // blue
-            NodeCategory.Logic => "#7C3AED", // violet
-            NodeCategory.Product or NodeCategory.Constant => "#059669", // green
-            NodeCategory.Mutator => "#D97706", // amber
-            NodeCategory.Calc => "#0891B2", // cyan
-            NodeCategory.Reference => "#4F46E5", // indigo
-            NodeCategory.RuleRef => "#DB2777", // pink
+            NodeCategory.Input or NodeCategory.Output => "#64748B",
+            NodeCategory.Filter or NodeCategory.FilterList => "#2563EB",
+            NodeCategory.Logic => "#7C3AED",
+            NodeCategory.Product or NodeCategory.Constant => "#059669",
+            NodeCategory.Mutator => "#D97706",
+            NodeCategory.Calc => "#0891B2",
+            NodeCategory.Reference => "#4F46E5",
+            NodeCategory.RuleRef => "#DB2777",
             NodeCategory.Switch or NodeCategory.Assert or NodeCategory.Bucket => "#9333EA",
             NodeCategory.Iterator or NodeCategory.Merge => "#0D9488",
             _ => "#64748B",
         };
-        return Freeze(hex);
-    }
-
-    private static Brush BranchBrush(EdgeBranch? b)
-    {
-        var hex = b switch
-        {
-            EdgeBranch.Pass => "#16A34A", // green
-            EdgeBranch.Fail => "#DC2626", // red
-            _ => "#94A3B8",               // slate (default / null)
-        };
-        return Freeze(hex);
-    }
-
-    private static SolidColorBrush Freeze(string hex)
-    {
         var brush = new SolidColorBrush((Color)ColorConverter.ConvertFromString(hex));
         brush.Freeze();
         return brush;

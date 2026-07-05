@@ -1,25 +1,27 @@
 using System.Collections.ObjectModel;
-using System.ComponentModel;
 using System.Data;
 using System.IO;
 using System.Text;
 using System.Text.Json;
+using System.Windows;
+using System.Windows.Media;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
-using RuleForge.Core;
 using RuleForge.Core.Models;
 using RuleForge.Studio.Core.Authoring;
 using RuleForge.Studio.Core.Connections;
 using RuleForge.Studio.Core.Settings;
 using RuleForge.Studio.Core.Testing;
+using RuleForge.Studio.Views;
 using Rule = RuleForge.Core.Models.Rule;
 
 namespace RuleForge.Studio.ViewModels;
 
 /// <summary>
-/// Phase-1 shell: multiple connections (local workspace / DocumentForge) persisted under
-/// %AppData%\RuleForge Studio, a hierarchical Object Explorer, a Nodify rule designer, a datasource
-/// viewer, and an in-process test harness. Rules/datasources are read through IRuleForgeConnection.
+/// The application shell view-model: connections + Object Explorer, the connector-based Nodify
+/// designer (interactive edges, per-node config dialogs, toolbox), a datasource viewer, and the
+/// in-process test harness. The loaded <see cref="Rule"/> is the single source of truth; the canvas
+/// is re-projected from it after every structural edit.
 /// </summary>
 public sealed partial class MainViewModel : ObservableObject
 {
@@ -37,9 +39,21 @@ public sealed partial class MainViewModel : ObservableObject
         ["rule-seat-assignments"] = "s-2j-2s-2p.json",
     };
 
+    /// <summary>Node types offered in the canvas toolbox.</summary>
+    public IReadOnlyList<ToolboxItem> Toolbox { get; } = new[]
+    {
+        new ToolboxItem("Filter", NodeCategory.Filter, "#2563EB"),
+        new ToolboxItem("Logic", NodeCategory.Logic, "#7C3AED"),
+        new ToolboxItem("Product", NodeCategory.Product, "#059669"),
+        new ToolboxItem("Mutator", NodeCategory.Mutator, "#D97706"),
+        new ToolboxItem("Calc", NodeCategory.Calc, "#0891B2"),
+        new ToolboxItem("Constant", NodeCategory.Constant, "#059669"),
+        new ToolboxItem("Output", NodeCategory.Output, "#64748B"),
+    };
+
     public ObservableCollection<ExplorerNodeViewModel> ExplorerRoots { get; } = new();
 
-    [ObservableProperty] private RuleGraphViewModel? _graph;
+    [ObservableProperty] private GraphViewModel? _graph;
     [ObservableProperty] private string _ruleHeader = "Select a rule or datasource in the Object Explorer.";
     [ObservableProperty] private string _requestJson = "{\n}\n";
     [ObservableProperty] private string _resultText = "";
@@ -49,90 +63,8 @@ public sealed partial class MainViewModel : ObservableObject
     [ObservableProperty] private string _referenceTitle = "";
     [ObservableProperty] private DataView? _referenceData;
 
-    // Node authoring: the schema-aware filter editor for the selected filter node.
-    [ObservableProperty] private FilterInspectorViewModel? _inspector;
-
-    partial void OnGraphChanged(RuleGraphViewModel? value)
-    {
-        if (value is null) return;
-        foreach (var n in value.Nodes)
-            n.PropertyChanged += OnNodePropertyChanged;
-    }
-
-    private void OnNodePropertyChanged(object? sender, PropertyChangedEventArgs e)
-    {
-        if (e.PropertyName == nameof(NodeViewModel.IsSelected) && sender is NodeViewModel { IsSelected: true } n)
-            OpenInspectorFor(n);
-    }
-
-    private void OpenInspectorFor(NodeViewModel nodeVm)
-    {
-        var node = _currentRule?.Nodes.FirstOrDefault(n => n.Id == nodeVm.Id);
-        if (node is null || node.Data.Category != NodeCategory.Filter)
-        {
-            Inspector = null;
-            return;
-        }
-
-        var fields = SchemaFields.FromInputSchema(_currentRule!.InputSchema);
-        var existing = FilterEditing.ReadStringFilter(node.Data.Config);
-        var path = existing?.Source.Path;
-        var opJson = existing is null ? "equals" : JsonName(existing.Compare.Operator);
-        var val = existing?.Compare.Value
-                  ?? (existing?.Compare.Values is { Count: > 0 } vs ? string.Join(", ", vs) : "");
-
-        Inspector = new FilterInspectorViewModel
-        {
-            NodeId = node.Id,
-            NodeLabel = node.Data.Label,
-            Fields = fields,
-            SelectedField = fields.FirstOrDefault(f => f.Path == path)
-                            ?? fields.FirstOrDefault(f => f.Type == SchemaFieldType.String)
-                            ?? fields.FirstOrDefault(),
-            Operator = opJson,
-            Value = val,
-        };
-    }
-
-    [RelayCommand]
-    private void ApplyFilter()
-    {
-        if (Inspector is null || _currentRule is null || Inspector.SelectedField is null) return;
-
-        var config = FilterEditing.ToConfig(
-            FilterEditing.BuildStringFilter(Inspector.SelectedField.Path, Inspector.Operator, Inspector.Value));
-        _currentRule = FilterEditing.ReplaceNodeConfig(_currentRule, Inspector.NodeId, config);
-        RebuildGraphKeepingSelection(Inspector.NodeId);
-        Run();
-    }
-
-    [RelayCommand]
-    private void AddFilter()
-    {
-        if (_currentRule is null) return;
-
-        var fields = SchemaFields.FromInputSchema(_currentRule.InputSchema);
-        var seed = fields.FirstOrDefault(f => f.Type == SchemaFieldType.String) ?? fields.FirstOrDefault();
-        if (seed is null)
-        {
-            StatusText = "This rule's request schema has no fields to filter on.";
-            return;
-        }
-
-        var (updated, newId) = FilterEditing.AddStringFilter(_currentRule, seed.Path);
-        _currentRule = updated;
-        RebuildGraphKeepingSelection(newId);
-    }
-
-    private void RebuildGraphKeepingSelection(string nodeId)
-    {
-        Graph = RuleGraphViewModel.FromRule(_currentRule!);
-        var vm = Graph.Nodes.FirstOrDefault(n => n.Id == nodeId);
-        if (vm is not null) vm.IsSelected = true; // reopens the inspector against the updated node
-    }
-
-    private static string JsonName(StringFilterOperator op)
-        => JsonSerializer.Serialize(op, AeroJson.Options).Trim('"');
+    /// <summary>Raised when a brand-new rule graph is loaded, so the view can fit it to screen.</summary>
+    public event Action? FitRequested;
 
     public MainViewModel()
     {
@@ -142,7 +74,8 @@ public sealed partial class MainViewModel : ObservableObject
         SeedFirstRun(fixtures);
     }
 
-    /// <summary>Called from MainWindow.Loaded — reconnects saved connections.</summary>
+    // ─── connections / explorer ──────────────────────────────────────────────
+
     public async Task InitializeAsync()
     {
         if (!_workspace.Settings.ReconnectOnStartup) return;
@@ -163,11 +96,10 @@ public sealed partial class MainViewModel : ObservableObject
         }
     }
 
-    /// <summary>Add + connect a new connection (dialog handled in the view).</summary>
     public async Task AddConnectionAsync(ConnectionDescriptor descriptor, string? apiKey)
     {
         var conn = ConnectionFactory.Create(descriptor, apiKey);
-        await conn.ConnectAsync(); // throws on failure → surfaced by the caller
+        await conn.ConnectAsync();
         _workspace.UpsertConnection(descriptor, apiKey);
         _workspace.TouchLastConnected(descriptor.Id);
         ExplorerRoots.Add(await BuildConnectionNodeAsync(conn, descriptor.Id));
@@ -187,12 +119,7 @@ public sealed partial class MainViewModel : ObservableObject
 
     private static async Task<ConnectionNodeViewModel> BuildConnectionNodeAsync(IRuleForgeConnection conn, string descriptorId)
     {
-        var connNode = new ConnectionNodeViewModel
-        {
-            Name = conn.DisplayName,
-            DescriptorId = descriptorId,
-            Connection = conn,
-        };
+        var connNode = new ConnectionNodeViewModel { Name = conn.DisplayName, DescriptorId = descriptorId, Connection = conn };
 
         var rulesFolder = new FolderNodeViewModel { Name = "Rules" };
         var rules = await conn.ListRulesAsync();
@@ -231,12 +158,8 @@ public sealed partial class MainViewModel : ObservableObject
     {
         switch (node)
         {
-            case RuleNodeViewModel r:
-                ShowRule(r.Connection, r.Rule);
-                break;
-            case ReferenceSetNodeViewModel rs:
-                ShowReferenceSet(rs.Connection, rs.ReferenceSet);
-                break;
+            case RuleNodeViewModel r: ShowRule(r.Connection, r.Rule); break;
+            case ReferenceSetNodeViewModel rs: ShowReferenceSet(rs.Connection, rs.ReferenceSet); break;
         }
     }
 
@@ -244,7 +167,6 @@ public sealed partial class MainViewModel : ObservableObject
     {
         ShowReferenceView = false;
         ResultText = "";
-        Inspector = null;
         _currentRule = conn.GetRuleAsync(summary.Id).GetAwaiter().GetResult();
         _evaluator = new InProcessEvaluator(conn.ReferenceSetSource);
 
@@ -255,20 +177,19 @@ public sealed partial class MainViewModel : ObservableObject
             return;
         }
 
-        Graph = RuleGraphViewModel.FromRule(_currentRule);
+        LoadGraph();
         RuleHeader = $"{_currentRule.Name}   ·   {_currentRule.Method} {_currentRule.Endpoint}   ·   v{_currentRule.CurrentVersion}   ·   {_currentRule.Status}";
         RequestJson = LoadSample(_currentRule.Id);
+        FitRequested?.Invoke();
     }
 
     private void ShowReferenceSet(IRuleForgeConnection conn, ReferenceSetSummary summary)
     {
-        Inspector = null;
         var rs = conn.GetReferenceSetAsync(summary.Id).GetAwaiter().GetResult();
         if (rs is null) return;
 
         var table = new DataTable();
-        foreach (var col in rs.Columns)
-            table.Columns.Add(col, typeof(string));
+        foreach (var col in rs.Columns) table.Columns.Add(col, typeof(string));
         foreach (var row in rs.Rows)
         {
             var dr = table.NewRow();
@@ -282,6 +203,120 @@ public sealed partial class MainViewModel : ObservableObject
         RuleHeader = ReferenceTitle;
         ShowReferenceView = true;
     }
+
+    // ─── canvas authoring ────────────────────────────────────────────────────
+
+    private void LoadGraph()
+    {
+        var graph = GraphViewModel.FromRule(_currentRule!);
+        graph.ConnectRequested += OnConnectRequested;
+        graph.DisconnectRequested += OnDisconnectRequested;
+        Graph = graph;
+    }
+
+    /// <summary>Re-project the canvas from the rule after an edit, keeping node positions.</summary>
+    private void RebuildGraph()
+    {
+        SyncPositionsFromGraph();
+        LoadGraph();
+    }
+
+    private void SyncPositionsFromGraph()
+    {
+        if (Graph is null || _currentRule is null) return;
+        var pos = Graph.Nodes.ToDictionary(n => n.Id, n => (n.Location.X, n.Location.Y));
+        _currentRule = GraphEditing.SyncPositions(_currentRule, pos);
+    }
+
+    private void OnConnectRequested(ConnectorViewModel output, ConnectorViewModel input)
+    {
+        if (_currentRule is null) return;
+        _currentRule = GraphEditing.AddEdge(_currentRule, output.Node.Id, output.Branch, input.Node.Id);
+        RebuildGraph();
+        Run();
+    }
+
+    private void OnDisconnectRequested(ConnectionViewModel connection)
+    {
+        if (_currentRule is null) return;
+        _currentRule = GraphEditing.RemoveEdge(_currentRule, connection.Source.Node.Id, connection.Target.Node.Id, connection.Source.Branch);
+        RebuildGraph();
+        Run();
+    }
+
+    /// <summary>Add a node at a graph-space location (used by toolbox drag-drop).</summary>
+    public void AddNodeAt(NodeCategory category, double x, double y)
+    {
+        if (_currentRule is null)
+        {
+            StatusText = "Open a rule before adding nodes.";
+            return;
+        }
+        SyncPositionsFromGraph();
+        var (updated, newId) = GraphEditing.AddNode(_currentRule, category, x, y);
+        _currentRule = updated;
+        LoadGraph();
+
+        if (category == NodeCategory.Filter)
+            EditNode(Graph?.Nodes.FirstOrDefault(n => n.Id == newId));
+    }
+
+    [RelayCommand]
+    private void AddFilter()
+    {
+        // Toolbar shortcut: drop a filter near the middle of the current view.
+        AddNodeAt(NodeCategory.Filter, 240, 200);
+    }
+
+    [RelayCommand]
+    private void EditNode(NodeViewModel? nodeVm)
+    {
+        if (nodeVm is null || _currentRule is null) return;
+        var node = _currentRule.Nodes.FirstOrDefault(n => n.Id == nodeVm.Id);
+        if (node is null) return;
+
+        if (node.Data.Category != NodeCategory.Filter)
+        {
+            MessageBox.Show(Application.Current.MainWindow!,
+                $"A settings editor for {node.Data.Category} nodes is coming next — the string filter is the first worked example.",
+                "RuleForge Studio", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        var vm = BuildFilterInspector(node);
+        var dlg = new FilterEditorDialog { DataContext = vm, Owner = Application.Current.MainWindow };
+        if (dlg.ShowDialog() == true && vm.SelectedField is not null)
+        {
+            var config = FilterEditing.ToConfig(FilterEditing.BuildStringFilter(vm.SelectedField.Path, vm.Operator, vm.Value));
+            _currentRule = FilterEditing.ReplaceNodeConfig(_currentRule, node.Id, config);
+            RebuildGraph();
+            Run();
+        }
+    }
+
+    private FilterInspectorViewModel BuildFilterInspector(RuleNode node)
+    {
+        var fields = SchemaFields.FromInputSchema(_currentRule!.InputSchema);
+        var existing = FilterEditing.ReadStringFilter(node.Data.Config);
+        var path = existing?.Source.Path;
+        var opJson = existing is null ? "equals" : JsonName(existing.Compare.Operator);
+        var val = existing?.Compare.Value
+                  ?? (existing?.Compare.Values is { Count: > 0 } vs ? string.Join(", ", vs) : "");
+
+        return new FilterInspectorViewModel
+        {
+            NodeId = node.Id,
+            NodeLabel = node.Data.Label,
+            Fields = fields,
+            SelectedField = fields.FirstOrDefault(f => f.Path == path)
+                            ?? fields.FirstOrDefault(f => f.Type == SchemaFieldType.String)
+                            ?? fields.FirstOrDefault(),
+            Operator = opJson,
+            Value = val,
+        };
+    }
+
+    // ─── test harness ────────────────────────────────────────────────────────
 
     [RelayCommand]
     private void Run()
@@ -321,8 +356,7 @@ public sealed partial class MainViewModel : ObservableObject
         if (SampleScenario.TryGetValue(ruleId, out var file))
         {
             var path = Path.Combine(_scenariosDir, file);
-            if (File.Exists(path))
-                return File.ReadAllText(path);
+            if (File.Exists(path)) return File.ReadAllText(path);
         }
         return "{\n}\n";
     }
@@ -337,7 +371,9 @@ public sealed partial class MainViewModel : ObservableObject
     private static string Pretty(JsonElement? element)
         => element is null ? "  (none)" : JsonSerializer.Serialize(element.Value, new JsonSerializerOptions { WriteIndented = true });
 
-    /// <summary>Walk up from the running exe to find the engine's <c>fixtures</c> folder (demo seed).</summary>
+    private static string JsonName(StringFilterOperator op)
+        => JsonSerializer.Serialize(op, RuleForge.Core.AeroJson.Options).Trim('"');
+
     private static string LocateFixturesRoot()
     {
         var dir = new DirectoryInfo(AppContext.BaseDirectory);
@@ -349,4 +385,21 @@ public sealed partial class MainViewModel : ObservableObject
         }
         return @"C:\DATA\14. ruleForge\ruleforge-studio\fixtures";
     }
+}
+
+/// <summary>A node type in the canvas toolbox.</summary>
+public sealed class ToolboxItem
+{
+    public ToolboxItem(string name, NodeCategory category, string colorHex)
+    {
+        Name = name;
+        Category = category;
+        var brush = new SolidColorBrush((Color)ColorConverter.ConvertFromString(colorHex));
+        brush.Freeze();
+        Color = brush;
+    }
+
+    public string Name { get; }
+    public NodeCategory Category { get; }
+    public Brush Color { get; }
 }
