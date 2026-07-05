@@ -1,10 +1,14 @@
 using System.Collections.ObjectModel;
+using System.ComponentModel;
 using System.Data;
 using System.IO;
 using System.Text;
 using System.Text.Json;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using RuleForge.Core;
+using RuleForge.Core.Models;
+using RuleForge.Studio.Core.Authoring;
 using RuleForge.Studio.Core.Connections;
 using RuleForge.Studio.Core.Settings;
 using RuleForge.Studio.Core.Testing;
@@ -44,6 +48,91 @@ public sealed partial class MainViewModel : ObservableObject
     [ObservableProperty] private bool _showReferenceView;
     [ObservableProperty] private string _referenceTitle = "";
     [ObservableProperty] private DataView? _referenceData;
+
+    // Node authoring: the schema-aware filter editor for the selected filter node.
+    [ObservableProperty] private FilterInspectorViewModel? _inspector;
+
+    partial void OnGraphChanged(RuleGraphViewModel? value)
+    {
+        if (value is null) return;
+        foreach (var n in value.Nodes)
+            n.PropertyChanged += OnNodePropertyChanged;
+    }
+
+    private void OnNodePropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(NodeViewModel.IsSelected) && sender is NodeViewModel { IsSelected: true } n)
+            OpenInspectorFor(n);
+    }
+
+    private void OpenInspectorFor(NodeViewModel nodeVm)
+    {
+        var node = _currentRule?.Nodes.FirstOrDefault(n => n.Id == nodeVm.Id);
+        if (node is null || node.Data.Category != NodeCategory.Filter)
+        {
+            Inspector = null;
+            return;
+        }
+
+        var fields = SchemaFields.FromInputSchema(_currentRule!.InputSchema);
+        var existing = FilterEditing.ReadStringFilter(node.Data.Config);
+        var path = existing?.Source.Path;
+        var opJson = existing is null ? "equals" : JsonName(existing.Compare.Operator);
+        var val = existing?.Compare.Value
+                  ?? (existing?.Compare.Values is { Count: > 0 } vs ? string.Join(", ", vs) : "");
+
+        Inspector = new FilterInspectorViewModel
+        {
+            NodeId = node.Id,
+            NodeLabel = node.Data.Label,
+            Fields = fields,
+            SelectedField = fields.FirstOrDefault(f => f.Path == path)
+                            ?? fields.FirstOrDefault(f => f.Type == SchemaFieldType.String)
+                            ?? fields.FirstOrDefault(),
+            Operator = opJson,
+            Value = val,
+        };
+    }
+
+    [RelayCommand]
+    private void ApplyFilter()
+    {
+        if (Inspector is null || _currentRule is null || Inspector.SelectedField is null) return;
+
+        var config = FilterEditing.ToConfig(
+            FilterEditing.BuildStringFilter(Inspector.SelectedField.Path, Inspector.Operator, Inspector.Value));
+        _currentRule = FilterEditing.ReplaceNodeConfig(_currentRule, Inspector.NodeId, config);
+        RebuildGraphKeepingSelection(Inspector.NodeId);
+        Run();
+    }
+
+    [RelayCommand]
+    private void AddFilter()
+    {
+        if (_currentRule is null) return;
+
+        var fields = SchemaFields.FromInputSchema(_currentRule.InputSchema);
+        var seed = fields.FirstOrDefault(f => f.Type == SchemaFieldType.String) ?? fields.FirstOrDefault();
+        if (seed is null)
+        {
+            StatusText = "This rule's request schema has no fields to filter on.";
+            return;
+        }
+
+        var (updated, newId) = FilterEditing.AddStringFilter(_currentRule, seed.Path);
+        _currentRule = updated;
+        RebuildGraphKeepingSelection(newId);
+    }
+
+    private void RebuildGraphKeepingSelection(string nodeId)
+    {
+        Graph = RuleGraphViewModel.FromRule(_currentRule!);
+        var vm = Graph.Nodes.FirstOrDefault(n => n.Id == nodeId);
+        if (vm is not null) vm.IsSelected = true; // reopens the inspector against the updated node
+    }
+
+    private static string JsonName(StringFilterOperator op)
+        => JsonSerializer.Serialize(op, AeroJson.Options).Trim('"');
 
     public MainViewModel()
     {
@@ -155,6 +244,7 @@ public sealed partial class MainViewModel : ObservableObject
     {
         ShowReferenceView = false;
         ResultText = "";
+        Inspector = null;
         _currentRule = conn.GetRuleAsync(summary.Id).GetAwaiter().GetResult();
         _evaluator = new InProcessEvaluator(conn.ReferenceSetSource);
 
@@ -172,6 +262,7 @@ public sealed partial class MainViewModel : ObservableObject
 
     private void ShowReferenceSet(IRuleForgeConnection conn, ReferenceSetSummary summary)
     {
+        Inspector = null;
         var rs = conn.GetReferenceSetAsync(summary.Id).GetAwaiter().GetResult();
         if (rs is null) return;
 

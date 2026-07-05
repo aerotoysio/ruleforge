@@ -11,6 +11,7 @@ namespace RuleForge.Studio.ViewModels;
 public sealed partial class NodeViewModel : ObservableObject
 {
     [ObservableProperty] private Point _location;
+    [ObservableProperty] private bool _isSelected;
 
     public string Id { get; init; } = "";
     public string Title { get; init; } = "";

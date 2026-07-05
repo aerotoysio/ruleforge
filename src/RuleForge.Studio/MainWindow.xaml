@@ -13,6 +13,7 @@
     <Window.Resources>
         <conv:BoolToVisibilityConverter x:Key="BoolToVis"/>
         <conv:InverseBoolToVisibilityConverter x:Key="InverseBoolToVis"/>
+        <conv:NullToVisibilityConverter x:Key="NullToVis"/>
 
         <!-- ===== Object Explorer tree templates (auto-applied by data type) ===== -->
         <HierarchicalDataTemplate DataType="{x:Type vm:ConnectionNodeViewModel}" ItemsSource="{Binding Children}">
@@ -68,6 +69,7 @@
 
         <Style x:Key="NodeContainerStyle" TargetType="nodify:ItemContainer">
             <Setter Property="Location" Value="{Binding Location, Mode=TwoWay}"/>
+            <Setter Property="IsSelected" Value="{Binding IsSelected, Mode=TwoWay}"/>
         </Style>
 
         <DataTemplate x:Key="ConnectionTemplate" DataType="{x:Type vm:ConnectionViewModel}">
@@ -119,8 +121,27 @@
                         <avalonDock:LayoutDocumentPane>
                             <avalonDock:LayoutDocument Title="Workspace" CanClose="False">
                                 <Grid>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="*"/>
+                                        <RowDefinition Height="Auto"/>
+                                    </Grid.RowDefinitions>
+
+                                    <!-- Toolbar (rules only) -->
+                                    <Border Grid.Row="0" Background="#FFEFF2F6" BorderBrush="#FFE2E8F0"
+                                            BorderThickness="0,0,0,1" Padding="8,5"
+                                            Visibility="{Binding ShowReferenceView, Converter={StaticResource InverseBoolToVis}}">
+                                        <StackPanel Orientation="Horizontal">
+                                            <Button Content="＋ Add filter" Command="{Binding AddFilterCommand}"
+                                                    Padding="10,3" Background="White" BorderBrush="#FFCBD5E1" Cursor="Hand"/>
+                                            <TextBlock Text="Select a filter node to edit it below."
+                                                       Foreground="#FF94A3B8" VerticalAlignment="Center"
+                                                       Margin="12,0,0,0" FontSize="11.5"/>
+                                        </StackPanel>
+                                    </Border>
+
                                     <!-- Rule designer -->
-                                    <Border Background="#FFFBFBFD"
+                                    <Border Grid.Row="1" Background="#FFFBFBFD"
                                             Visibility="{Binding ShowReferenceView, Converter={StaticResource InverseBoolToVis}}">
                                         <nodify:NodifyEditor x:Name="Editor"
                                                              ItemsSource="{Binding Graph.Nodes}"
@@ -132,7 +153,7 @@
                                                              Background="#FFFBFBFD"/>
                                     </Border>
                                     <!-- Datasource (reference-set) grid -->
-                                    <DockPanel Background="White"
+                                    <DockPanel Grid.Row="1" Background="White"
                                                Visibility="{Binding ShowReferenceView, Converter={StaticResource BoolToVis}}">
                                         <Border DockPanel.Dock="Top" Background="#FFF1F5F9" Padding="12,8"
                                                 BorderBrush="#FFE2E8F0" BorderThickness="0,0,0,1">
@@ -146,6 +167,30 @@
                                                   Background="White" FontSize="12"
                                                   HorizontalGridLinesBrush="#FFEDF0F4"/>
                                     </DockPanel>
+
+                                    <!-- Schema-aware filter inspector -->
+                                    <Border Grid.Row="2" Background="#FFF8FAFC" BorderBrush="#FFE2E8F0"
+                                            BorderThickness="0,1,0,0" Padding="10,8"
+                                            Visibility="{Binding Inspector, Converter={StaticResource NullToVis}}">
+                                        <WrapPanel DataContext="{Binding Inspector}">
+                                            <TextBlock Text="Filter · request field:" VerticalAlignment="Center"
+                                                       Foreground="#FF334155" FontWeight="SemiBold"/>
+                                            <ComboBox ItemsSource="{Binding Fields}" SelectedItem="{Binding SelectedField}"
+                                                      DisplayMemberPath="Display" Width="235" Margin="8,0,0,0"/>
+                                            <TextBlock Text="operator" VerticalAlignment="Center"
+                                                       Foreground="#FF334155" Margin="14,0,0,0"/>
+                                            <ComboBox ItemsSource="{Binding Operators}" SelectedItem="{Binding Operator}"
+                                                      Width="130" Margin="8,0,0,0"/>
+                                            <TextBlock Text="value" VerticalAlignment="Center"
+                                                       Foreground="#FF334155" Margin="14,0,0,0"/>
+                                            <TextBox Text="{Binding Value, UpdateSourceTrigger=PropertyChanged}"
+                                                     IsEnabled="{Binding ValueEnabled}" Width="170" Margin="8,0,0,0"
+                                                     VerticalContentAlignment="Center" BorderBrush="#FFCBD5E1"/>
+                                            <Button Content="Apply &amp; run" Margin="14,0,0,0" Padding="12,4"
+                                                    Background="#FF2563EB" Foreground="White" BorderThickness="0" Cursor="Hand"
+                                                    Command="{Binding DataContext.ApplyFilterCommand, RelativeSource={RelativeSource AncestorType=Window}}"/>
+                                        </WrapPanel>
+                                    </Border>
                                 </Grid>
                             </avalonDock:LayoutDocument>
                         </avalonDock:LayoutDocumentPane>
