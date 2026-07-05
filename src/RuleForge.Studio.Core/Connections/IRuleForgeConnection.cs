@@ -43,6 +43,9 @@ public interface IRuleForgeConnection
     string DisplayName { get; }
     RuleForgeCapabilities Capabilities { get; }
 
+    /// <summary>Validate the connection (dirs exist / endpoint reachable). Throws on failure.</summary>
+    Task ConnectAsync(CancellationToken ct = default);
+
     Task<IReadOnlyList<RuleSummary>> ListRulesAsync(CancellationToken ct = default);
     Task<Rule?> GetRuleAsync(string ruleId, int? version = null, CancellationToken ct = default);
 

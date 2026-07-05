@@ -30,6 +30,13 @@ public sealed class LocalWorkspaceConnection : IRuleForgeConnection
     public RuleForgeCapabilities Capabilities => RuleForgeCapabilities.Rules | RuleForgeCapabilities.ReferenceSets;
     public IReferenceSetSource ReferenceSetSource => _refs;
 
+    public Task ConnectAsync(CancellationToken ct = default)
+    {
+        if (!Directory.Exists(_rulesDir))
+            throw new DirectoryNotFoundException($"Rules folder not found: {_rulesDir}");
+        return Task.CompletedTask;
+    }
+
     public async Task<IReadOnlyList<RuleSummary>> ListRulesAsync(CancellationToken ct = default)
     {
         var list = new List<RuleSummary>();

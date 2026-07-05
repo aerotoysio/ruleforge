@@ -20,6 +20,8 @@ public abstract partial class ExplorerNodeViewModel : ObservableObject
 public sealed class ConnectionNodeViewModel : ExplorerNodeViewModel
 {
     public ConnectionNodeViewModel() { IsFolder = true; Glyph = "◈"; }
+    public required string DescriptorId { get; init; }
+    public required IRuleForgeConnection Connection { get; init; }
 }
 
 /// <summary>A grouping folder (Rules, Reference sets, Products & templates, …).</summary>
@@ -32,12 +34,14 @@ public sealed class FolderNodeViewModel : ExplorerNodeViewModel
 public sealed class RuleNodeViewModel : ExplorerNodeViewModel
 {
     public required RuleSummary Rule { get; init; }
+    public required IRuleForgeConnection Connection { get; init; }
 }
 
 /// <summary>A reference-set (datasource) leaf — selecting it opens the datasource grid.</summary>
 public sealed class ReferenceSetNodeViewModel : ExplorerNodeViewModel
 {
     public required ReferenceSetSummary ReferenceSet { get; init; }
+    public required IRuleForgeConnection Connection { get; init; }
 }
 
 /// <summary>A non-selectable informational leaf (e.g. "coming soon").</summary>

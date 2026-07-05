@@ -5,27 +5,26 @@ using System.Text;
 using System.Text.Json;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
-using RuleForge.Core.Models;
 using RuleForge.Studio.Core.Connections;
+using RuleForge.Studio.Core.Settings;
 using RuleForge.Studio.Core.Testing;
 using Rule = RuleForge.Core.Models.Rule;
 
 namespace RuleForge.Studio.ViewModels;
 
 /// <summary>
-/// Phase-1 shell: an Object Explorer over an <see cref="IRuleForgeConnection"/> (currently a local
-/// workspace), a Nodify rule designer, a reference-set (datasource) viewer, and an in-process test
-/// harness. The DocumentForge connection slots in behind the same interface next.
+/// Phase-1 shell: multiple connections (local workspace / DocumentForge) persisted under
+/// %AppData%\RuleForge Studio, a hierarchical Object Explorer, a Nodify rule designer, a datasource
+/// viewer, and an in-process test harness. Rules/datasources are read through IRuleForgeConnection.
 /// </summary>
 public sealed partial class MainViewModel : ObservableObject
 {
-    private readonly IRuleForgeConnection _connection;
-    private readonly InProcessEvaluator _evaluator;
+    private readonly StudioWorkspace _workspace;
     private readonly string _scenariosDir;
 
     private Rule? _currentRule;
+    private InProcessEvaluator? _evaluator;
 
-    // Rule → a representative sample request (from the engine's own scenarios).
     private static readonly Dictionary<string, string> SampleScenario = new()
     {
         ["rule-bag-policy"] = "s-bag-3pc-markup15.json",
@@ -40,32 +39,74 @@ public sealed partial class MainViewModel : ObservableObject
     [ObservableProperty] private string _ruleHeader = "Select a rule or datasource in the Object Explorer.";
     [ObservableProperty] private string _requestJson = "{\n}\n";
     [ObservableProperty] private string _resultText = "";
+    [ObservableProperty] private string _statusText = "Ready";
 
-    // Datasource (reference-set) view.
     [ObservableProperty] private bool _showReferenceView;
     [ObservableProperty] private string _referenceTitle = "";
     [ObservableProperty] private DataView? _referenceData;
 
     public MainViewModel()
     {
-        var root = LocateFixturesRoot();
-        _scenariosDir = Path.Combine(root, "scenarios");
-        _connection = new LocalWorkspaceConnection(
-            Path.Combine(root, "rules"),
-            Path.Combine(root, "refs"),
-            "Local workspace (fixtures)");
-        _evaluator = new InProcessEvaluator(_connection.ReferenceSetSource);
-
-        BuildExplorer();
+        _workspace = new StudioWorkspace();
+        var fixtures = LocateFixturesRoot();
+        _scenariosDir = Path.Combine(fixtures, "scenarios");
+        SeedFirstRun(fixtures);
     }
 
-    private void BuildExplorer()
+    /// <summary>Called from MainWindow.Loaded — reconnects saved connections.</summary>
+    public async Task InitializeAsync()
     {
-        var conn = new ConnectionNodeViewModel { Name = _connection.DisplayName };
+        if (!_workspace.Settings.ReconnectOnStartup) return;
 
-        // Rules — grouped by category when present, else a flat list.
+        foreach (var descriptor in _workspace.Connections.OrderByDescending(c => c.LastConnectedUtc))
+        {
+            try
+            {
+                var conn = _workspace.CreateConnection(descriptor);
+                await conn.ConnectAsync();
+                ExplorerRoots.Add(await BuildConnectionNodeAsync(conn, descriptor.Id));
+                _workspace.TouchLastConnected(descriptor.Id);
+            }
+            catch (Exception ex)
+            {
+                StatusText = $"Could not connect '{descriptor.Name}': {ex.Message}";
+            }
+        }
+    }
+
+    /// <summary>Add + connect a new connection (dialog handled in the view).</summary>
+    public async Task AddConnectionAsync(ConnectionDescriptor descriptor, string? apiKey)
+    {
+        var conn = ConnectionFactory.Create(descriptor, apiKey);
+        await conn.ConnectAsync(); // throws on failure → surfaced by the caller
+        _workspace.UpsertConnection(descriptor, apiKey);
+        _workspace.TouchLastConnected(descriptor.Id);
+        ExplorerRoots.Add(await BuildConnectionNodeAsync(conn, descriptor.Id));
+        StatusText = $"Connected '{descriptor.Name}'.";
+    }
+
+    private void SeedFirstRun(string fixturesRoot)
+    {
+        if (_workspace.Connections.Count > 0) return;
+        _workspace.UpsertConnection(new ConnectionDescriptor
+        {
+            Kind = RuleForgeConnectionKind.LocalWorkspace,
+            Name = "Local workspace (fixtures)",
+            WorkspaceDir = fixturesRoot,
+        });
+    }
+
+    private static async Task<ConnectionNodeViewModel> BuildConnectionNodeAsync(IRuleForgeConnection conn, string descriptorId)
+    {
+        var connNode = new ConnectionNodeViewModel
+        {
+            Name = conn.DisplayName,
+            DescriptorId = descriptorId,
+            Connection = conn,
+        };
+
         var rulesFolder = new FolderNodeViewModel { Name = "Rules" };
-        var rules = _connection.ListRulesAsync().GetAwaiter().GetResult();
+        var rules = await conn.ListRulesAsync();
         foreach (var group in rules.GroupBy(r => r.Category).OrderBy(g => g.Key ?? "￿"))
         {
             var target = rulesFolder;
@@ -75,27 +116,19 @@ public sealed partial class MainViewModel : ObservableObject
                 rulesFolder.Children.Add(target);
             }
             foreach (var r in group.OrderBy(r => r.Name, StringComparer.OrdinalIgnoreCase))
-                target.Children.Add(new RuleNodeViewModel { Name = r.Name, Glyph = "▪", Rule = r });
+                target.Children.Add(new RuleNodeViewModel { Name = r.Name, Glyph = "▪", Rule = r, Connection = conn });
         }
-        conn.Children.Add(rulesFolder);
+        connNode.Children.Add(rulesFolder);
 
-        // Reference sets (datasources).
         var refFolder = new FolderNodeViewModel { Name = "Reference sets (datasources)" };
-        foreach (var rs in _connection.ListReferenceSetsAsync().GetAwaiter().GetResult())
-            refFolder.Children.Add(new ReferenceSetNodeViewModel
-            {
-                Name = rs.Name,
-                Glyph = "▤",
-                ReferenceSet = rs,
-            });
-        conn.Children.Add(refFolder);
+        foreach (var rs in await conn.ListReferenceSetsAsync())
+            refFolder.Children.Add(new ReferenceSetNodeViewModel { Name = rs.Name, Glyph = "▤", ReferenceSet = rs, Connection = conn });
+        connNode.Children.Add(refFolder);
 
-        // Placeholders for the homes we'll build out (Andrew: products/outputs/templates/datasources).
-        conn.Children.Add(Placeholder("Products & templates"));
-        conn.Children.Add(Placeholder("Schemas"));
-        conn.Children.Add(Placeholder("Environments"));
-
-        ExplorerRoots.Add(conn);
+        connNode.Children.Add(Placeholder("Products & templates"));
+        connNode.Children.Add(Placeholder("Schemas"));
+        connNode.Children.Add(Placeholder("Environments"));
+        return connNode;
     }
 
     private static FolderNodeViewModel Placeholder(string name)
@@ -105,25 +138,26 @@ public sealed partial class MainViewModel : ObservableObject
         return folder;
     }
 
-    /// <summary>Called from the tree's SelectedItemChanged.</summary>
     public void OnExplorerNodeSelected(ExplorerNodeViewModel? node)
     {
         switch (node)
         {
             case RuleNodeViewModel r:
-                ShowRule(r.Rule);
+                ShowRule(r.Connection, r.Rule);
                 break;
             case ReferenceSetNodeViewModel rs:
-                ShowReferenceSet(rs.ReferenceSet);
+                ShowReferenceSet(rs.Connection, rs.ReferenceSet);
                 break;
         }
     }
 
-    private void ShowRule(RuleSummary summary)
+    private void ShowRule(IRuleForgeConnection conn, RuleSummary summary)
     {
         ShowReferenceView = false;
         ResultText = "";
-        _currentRule = _connection.GetRuleAsync(summary.Id).GetAwaiter().GetResult();
+        _currentRule = conn.GetRuleAsync(summary.Id).GetAwaiter().GetResult();
+        _evaluator = new InProcessEvaluator(conn.ReferenceSetSource);
+
         if (_currentRule is null)
         {
             Graph = null;
@@ -136,9 +170,9 @@ public sealed partial class MainViewModel : ObservableObject
         RequestJson = LoadSample(_currentRule.Id);
     }
 
-    private void ShowReferenceSet(ReferenceSetSummary summary)
+    private void ShowReferenceSet(IRuleForgeConnection conn, ReferenceSetSummary summary)
     {
-        var rs = _connection.GetReferenceSetAsync(summary.Id).GetAwaiter().GetResult();
+        var rs = conn.GetReferenceSetAsync(summary.Id).GetAwaiter().GetResult();
         if (rs is null) return;
 
         var table = new DataTable();
@@ -161,7 +195,7 @@ public sealed partial class MainViewModel : ObservableObject
     [RelayCommand]
     private void Run()
     {
-        if (_currentRule is null) return;
+        if (_currentRule is null || _evaluator is null) return;
 
         try
         {
@@ -210,12 +244,9 @@ public sealed partial class MainViewModel : ObservableObject
     };
 
     private static string Pretty(JsonElement? element)
-    {
-        if (element is null) return "  (none)";
-        return JsonSerializer.Serialize(element.Value, new JsonSerializerOptions { WriteIndented = true });
-    }
+        => element is null ? "  (none)" : JsonSerializer.Serialize(element.Value, new JsonSerializerOptions { WriteIndented = true });
 
-    /// <summary>Walk up from the running exe to find the engine's <c>fixtures</c> folder (demo-only).</summary>
+    /// <summary>Walk up from the running exe to find the engine's <c>fixtures</c> folder (demo seed).</summary>
     private static string LocateFixturesRoot()
     {
         var dir = new DirectoryInfo(AppContext.BaseDirectory);
