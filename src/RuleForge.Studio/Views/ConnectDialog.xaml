@@ -43,7 +43,9 @@
         <StackPanel x:Name="DfPanel" Visibility="Collapsed">
             <TextBlock Text="DocumentForge URL"/>
             <TextBox x:Name="UrlBox" Text="https://documentforge.onrender.com"/>
-            <TextBlock Text="API key (stored DPAPI-encrypted)"/>
+            <TextBlock Text="Database"/>
+            <TextBox x:Name="DatabaseBox" Text="ruleForge"/>
+            <TextBlock Text="API key (stored DPAPI-encrypted; leave blank if none)"/>
             <PasswordBox x:Name="KeyBox"/>
             <TextBlock Text="Environment"/>
             <TextBox x:Name="EnvBox" Text="staging"/>

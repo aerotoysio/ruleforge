@@ -60,6 +60,7 @@ public partial class ConnectDialog : Window
                     Kind = RuleForgeConnectionKind.DocumentForge,
                     Name = FallbackName(NameBox.Text, url),
                     Url = url,
+                    Database = string.IsNullOrWhiteSpace(DatabaseBox.Text) ? null : DatabaseBox.Text.Trim(),
                     Environment = string.IsNullOrWhiteSpace(EnvBox.Text) ? "staging" : EnvBox.Text.Trim(),
                     CollectionPrefix = string.IsNullOrWhiteSpace(PrefixBox.Text) ? null : PrefixBox.Text.Trim(),
                 };

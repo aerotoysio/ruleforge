@@ -22,7 +22,14 @@ public sealed class DocumentForgeConnection : IRuleForgeConnection, IDisposable
     public DocumentForgeConnection(ConnectionDescriptor descriptor, string? apiKey)
     {
         _http = new HttpClient { Timeout = TimeSpan.FromMinutes(2) };
-        _client = new DfClient(_http, descriptor.Url!.TrimEnd('/'), apiKey ?? "");
+
+        // DocumentForge scopes collections per database via /db/{name}. When a database is
+        // named, target it; otherwise talk to the instance root (default database).
+        var baseUrl = descriptor.Url!.TrimEnd('/');
+        if (!string.IsNullOrWhiteSpace(descriptor.Database))
+            baseUrl += "/db/" + descriptor.Database;
+
+        _client = new DfClient(_http, baseUrl, apiKey ?? "");
         _prefix = descriptor.CollectionPrefix ?? "";
         _ruleSource = new DocumentForgeRuleSource(_client, descriptor.Environment ?? "staging", descriptor.CollectionPrefix);
         _refSource = new DocumentForgeReferenceSetSource(_client, descriptor.CollectionPrefix);

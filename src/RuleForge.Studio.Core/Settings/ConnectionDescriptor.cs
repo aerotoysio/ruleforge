@@ -17,6 +17,7 @@ public sealed class ConnectionDescriptor
 
     // DocumentForge
     public string? Url { get; set; }
+    public string? Database { get; set; }
     public string? ApiKeySecretId { get; set; }
     public string? Environment { get; set; }
     public string? CollectionPrefix { get; set; }
