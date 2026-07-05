@@ -1,26 +1,29 @@
 using System.Collections.ObjectModel;
+using System.Data;
 using System.IO;
 using System.Text;
 using System.Text.Json;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
-using RuleForge.Core.Loader;
 using RuleForge.Core.Models;
+using RuleForge.Studio.Core.Connections;
 using RuleForge.Studio.Core.Testing;
+using Rule = RuleForge.Core.Models.Rule;
 
 namespace RuleForge.Studio.ViewModels;
 
 /// <summary>
-/// Phase-0 demo shell: lists the engine's fixture rules, renders the selected rule on the
-/// Nodify canvas, and runs it in-process through the real engine so you can see a live result +
-/// per-node trace. This is a vertical slice — the real DocumentForge connection + authoring
-/// come in later phases.
+/// Phase-1 shell: an Object Explorer over an <see cref="IRuleForgeConnection"/> (currently a local
+/// workspace), a Nodify rule designer, a reference-set (datasource) viewer, and an in-process test
+/// harness. The DocumentForge connection slots in behind the same interface next.
 /// </summary>
 public sealed partial class MainViewModel : ObservableObject
 {
-    private readonly string _rulesDir;
-    private readonly LocalFileRuleSource _ruleSource;
+    private readonly IRuleForgeConnection _connection;
     private readonly InProcessEvaluator _evaluator;
+    private readonly string _scenariosDir;
+
+    private Rule? _currentRule;
 
     // Rule → a representative sample request (from the engine's own scenarios).
     private static readonly Dictionary<string, string> SampleScenario = new()
@@ -31,58 +34,139 @@ public sealed partial class MainViewModel : ObservableObject
         ["rule-seat-assignments"] = "s-2j-2s-2p.json",
     };
 
-    public ObservableCollection<RuleListItem> Rules { get; } = new();
+    public ObservableCollection<ExplorerNodeViewModel> ExplorerRoots { get; } = new();
 
-    [ObservableProperty] private RuleListItem? _selectedRule;
     [ObservableProperty] private RuleGraphViewModel? _graph;
-    [ObservableProperty] private string _ruleHeader = "Select a rule to view its graph.";
+    [ObservableProperty] private string _ruleHeader = "Select a rule or datasource in the Object Explorer.";
     [ObservableProperty] private string _requestJson = "{\n}\n";
     [ObservableProperty] private string _resultText = "";
+
+    // Datasource (reference-set) view.
+    [ObservableProperty] private bool _showReferenceView;
+    [ObservableProperty] private string _referenceTitle = "";
+    [ObservableProperty] private DataView? _referenceData;
 
     public MainViewModel()
     {
         var root = LocateFixturesRoot();
-        _rulesDir = Path.Combine(root, "rules");
-        var refsDir = Path.Combine(root, "refs");
+        _scenariosDir = Path.Combine(root, "scenarios");
+        _connection = new LocalWorkspaceConnection(
+            Path.Combine(root, "rules"),
+            Path.Combine(root, "refs"),
+            "Local workspace (fixtures)");
+        _evaluator = new InProcessEvaluator(_connection.ReferenceSetSource);
 
-        _ruleSource = new LocalFileRuleSource(_rulesDir);
-        _evaluator = new InProcessEvaluator(new LocalFileReferenceSetSource(refsDir));
-
-        foreach (var id in DiscoverRuleIds(_rulesDir))
-        {
-            var rule = _ruleSource.GetByIdAsync(id, null).GetAwaiter().GetResult();
-            if (rule is not null)
-                Rules.Add(new RuleListItem(rule));
-        }
-
-        SelectedRule = Rules.FirstOrDefault();
+        BuildExplorer();
     }
 
-    partial void OnSelectedRuleChanged(RuleListItem? value)
+    private void BuildExplorer()
     {
+        var conn = new ConnectionNodeViewModel { Name = _connection.DisplayName };
+
+        // Rules — grouped by category when present, else a flat list.
+        var rulesFolder = new FolderNodeViewModel { Name = "Rules" };
+        var rules = _connection.ListRulesAsync().GetAwaiter().GetResult();
+        foreach (var group in rules.GroupBy(r => r.Category).OrderBy(g => g.Key ?? "￿"))
+        {
+            var target = rulesFolder;
+            if (group.Key is { } cat && !string.IsNullOrWhiteSpace(cat))
+            {
+                target = new FolderNodeViewModel { Name = cat };
+                rulesFolder.Children.Add(target);
+            }
+            foreach (var r in group.OrderBy(r => r.Name, StringComparer.OrdinalIgnoreCase))
+                target.Children.Add(new RuleNodeViewModel { Name = r.Name, Glyph = "▪", Rule = r });
+        }
+        conn.Children.Add(rulesFolder);
+
+        // Reference sets (datasources).
+        var refFolder = new FolderNodeViewModel { Name = "Reference sets (datasources)" };
+        foreach (var rs in _connection.ListReferenceSetsAsync().GetAwaiter().GetResult())
+            refFolder.Children.Add(new ReferenceSetNodeViewModel
+            {
+                Name = rs.Name,
+                Glyph = "▤",
+                ReferenceSet = rs,
+            });
+        conn.Children.Add(refFolder);
+
+        // Placeholders for the homes we'll build out (Andrew: products/outputs/templates/datasources).
+        conn.Children.Add(Placeholder("Products & templates"));
+        conn.Children.Add(Placeholder("Schemas"));
+        conn.Children.Add(Placeholder("Environments"));
+
+        ExplorerRoots.Add(conn);
+    }
+
+    private static FolderNodeViewModel Placeholder(string name)
+    {
+        var folder = new FolderNodeViewModel { Name = name, IsExpanded = false };
+        folder.Children.Add(new MessageNodeViewModel { Name = "(coming soon)" });
+        return folder;
+    }
+
+    /// <summary>Called from the tree's SelectedItemChanged.</summary>
+    public void OnExplorerNodeSelected(ExplorerNodeViewModel? node)
+    {
+        switch (node)
+        {
+            case RuleNodeViewModel r:
+                ShowRule(r.Rule);
+                break;
+            case ReferenceSetNodeViewModel rs:
+                ShowReferenceSet(rs.ReferenceSet);
+                break;
+        }
+    }
+
+    private void ShowRule(RuleSummary summary)
+    {
+        ShowReferenceView = false;
         ResultText = "";
-        if (value is null)
+        _currentRule = _connection.GetRuleAsync(summary.Id).GetAwaiter().GetResult();
+        if (_currentRule is null)
         {
             Graph = null;
-            RuleHeader = "Select a rule to view its graph.";
+            RuleHeader = $"Could not load rule '{summary.Id}'.";
             return;
         }
 
-        var rule = value.Rule;
-        Graph = RuleGraphViewModel.FromRule(rule);
-        RuleHeader = $"{rule.Name}   ·   {rule.Method} {rule.Endpoint}   ·   v{rule.CurrentVersion}   ·   {rule.Status}";
-        RequestJson = LoadSample(rule.Id);
+        Graph = RuleGraphViewModel.FromRule(_currentRule);
+        RuleHeader = $"{_currentRule.Name}   ·   {_currentRule.Method} {_currentRule.Endpoint}   ·   v{_currentRule.CurrentVersion}   ·   {_currentRule.Status}";
+        RequestJson = LoadSample(_currentRule.Id);
+    }
+
+    private void ShowReferenceSet(ReferenceSetSummary summary)
+    {
+        var rs = _connection.GetReferenceSetAsync(summary.Id).GetAwaiter().GetResult();
+        if (rs is null) return;
+
+        var table = new DataTable();
+        foreach (var col in rs.Columns)
+            table.Columns.Add(col, typeof(string));
+        foreach (var row in rs.Rows)
+        {
+            var dr = table.NewRow();
+            foreach (var col in rs.Columns)
+                dr[col] = row.TryGetValue(col, out var v) ? JsonToString(v) : "";
+            table.Rows.Add(dr);
+        }
+
+        ReferenceData = table.DefaultView;
+        ReferenceTitle = $"{rs.Name}   ·   {rs.Columns.Count} columns × {rs.Rows.Count} rows   ·   v{rs.CurrentVersion}";
+        RuleHeader = ReferenceTitle;
+        ShowReferenceView = true;
     }
 
     [RelayCommand]
     private void Run()
     {
-        if (SelectedRule is null) return;
+        if (_currentRule is null) return;
 
         try
         {
             using var doc = JsonDocument.Parse(RequestJson);
-            var envelope = _evaluator.Evaluate(SelectedRule.Rule, doc.RootElement, debug: true);
+            var envelope = _evaluator.Evaluate(_currentRule, doc.RootElement, debug: true);
 
             var sb = new StringBuilder();
             sb.AppendLine($"decision : {envelope.Decision}");
@@ -111,26 +195,19 @@ public sealed partial class MainViewModel : ObservableObject
     {
         if (SampleScenario.TryGetValue(ruleId, out var file))
         {
-            var path = Path.Combine(Path.GetDirectoryName(_rulesDir)!, "scenarios", file);
+            var path = Path.Combine(_scenariosDir, file);
             if (File.Exists(path))
                 return File.ReadAllText(path);
         }
         return "{\n}\n";
     }
 
-    private static IEnumerable<string> DiscoverRuleIds(string rulesDir)
+    private static string JsonToString(JsonElement e) => e.ValueKind switch
     {
-        if (!Directory.Exists(rulesDir)) return [];
-        return Directory.EnumerateFiles(rulesDir, "*.v*.json")
-            .Select(f => Path.GetFileName(f))
-            .Select(name =>
-            {
-                var idx = name.IndexOf(".v", StringComparison.Ordinal);
-                return idx > 0 ? name[..idx] : name;
-            })
-            .Distinct(StringComparer.Ordinal)
-            .OrderBy(x => x, StringComparer.Ordinal);
-    }
+        JsonValueKind.String => e.GetString() ?? "",
+        JsonValueKind.Null => "",
+        _ => e.GetRawText(),
+    };
 
     private static string Pretty(JsonElement? element)
     {
@@ -144,21 +221,10 @@ public sealed partial class MainViewModel : ObservableObject
         var dir = new DirectoryInfo(AppContext.BaseDirectory);
         while (dir is not null)
         {
-            var candidate = Path.Combine(dir.FullName, "fixtures", "rules");
-            if (Directory.Exists(candidate))
+            if (Directory.Exists(Path.Combine(dir.FullName, "fixtures", "rules")))
                 return Path.Combine(dir.FullName, "fixtures");
             dir = dir.Parent;
         }
-        // Fallback to the known worktree location.
         return @"C:\DATA\14. ruleForge\ruleforge-studio\fixtures";
     }
-}
-
-/// <summary>Object-explorer entry for a rule.</summary>
-public sealed class RuleListItem
-{
-    public RuleListItem(Rule rule) => Rule = rule;
-    public Rule Rule { get; }
-    public string Display => $"{Rule.Name}";
-    public override string ToString() => Display;
 }

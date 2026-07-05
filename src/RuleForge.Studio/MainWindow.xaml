@@ -4,13 +4,46 @@
         xmlns:avalonDock="https://github.com/Dirkster99/AvalonDock"
         xmlns:nodify="clr-namespace:Nodify;assembly=Nodify"
         xmlns:vm="clr-namespace:RuleForge.Studio.ViewModels"
+        xmlns:conv="clr-namespace:RuleForge.Studio.Converters"
         Title="RuleForge Studio" Height="780" Width="1280"
         WindowStartupLocation="CenterScreen"
         Icon="Assets/ruleforge.ico"
         Background="#FFF3F4F6"
         TextOptions.TextFormattingMode="Display">
     <Window.Resources>
-        <!-- A single node card. Fixed size so connection anchors line up. -->
+        <conv:BoolToVisibilityConverter x:Key="BoolToVis"/>
+        <conv:InverseBoolToVisibilityConverter x:Key="InverseBoolToVis"/>
+
+        <!-- ===== Object Explorer tree templates (auto-applied by data type) ===== -->
+        <HierarchicalDataTemplate DataType="{x:Type vm:ConnectionNodeViewModel}" ItemsSource="{Binding Children}">
+            <StackPanel Orientation="Horizontal">
+                <TextBlock Text="{Binding Glyph}" Foreground="#FF4F46E5" Margin="0,0,6,0"/>
+                <TextBlock Text="{Binding Name}" FontWeight="SemiBold" Foreground="#FF1F2937"/>
+            </StackPanel>
+        </HierarchicalDataTemplate>
+        <HierarchicalDataTemplate DataType="{x:Type vm:FolderNodeViewModel}" ItemsSource="{Binding Children}">
+            <StackPanel Orientation="Horizontal">
+                <TextBlock Text="{Binding Glyph}" Foreground="#FF94A3B8" Margin="0,0,6,0"/>
+                <TextBlock Text="{Binding Name}" FontWeight="SemiBold" Foreground="#FF334155"/>
+            </StackPanel>
+        </HierarchicalDataTemplate>
+        <DataTemplate DataType="{x:Type vm:RuleNodeViewModel}">
+            <StackPanel Orientation="Horizontal">
+                <TextBlock Text="{Binding Glyph}" Foreground="#FF2563EB" Margin="0,0,6,0"/>
+                <TextBlock Text="{Binding Name}" Foreground="#FF1F2937"/>
+            </StackPanel>
+        </DataTemplate>
+        <DataTemplate DataType="{x:Type vm:ReferenceSetNodeViewModel}">
+            <StackPanel Orientation="Horizontal">
+                <TextBlock Text="{Binding Glyph}" Foreground="#FF059669" Margin="0,0,6,0"/>
+                <TextBlock Text="{Binding Name}" Foreground="#FF1F2937"/>
+            </StackPanel>
+        </DataTemplate>
+        <DataTemplate DataType="{x:Type vm:MessageNodeViewModel}">
+            <TextBlock Text="{Binding Name}" FontStyle="Italic" Foreground="#FF94A3B8"/>
+        </DataTemplate>
+
+        <!-- ===== Nodify node card ===== -->
         <DataTemplate x:Key="NodeTemplate" DataType="{x:Type vm:NodeViewModel}">
             <Border Width="172" Height="68" CornerRadius="6" Background="White"
                     BorderBrush="#FFE2E8F0" BorderThickness="1" SnapsToDevicePixels="True">
@@ -58,39 +91,62 @@
 
         <StatusBar DockPanel.Dock="Bottom" Background="#FFE5E7EB">
             <StatusBarItem Content="{Binding RuleHeader}"/>
-            <StatusBarItem HorizontalAlignment="Right" Content="RuleForge Studio v0.9.0 · Phase 0"/>
+            <StatusBarItem HorizontalAlignment="Right" Content="RuleForge Studio v0.9.0 · Phase 1"/>
         </StatusBar>
 
         <avalonDock:DockingManager x:Name="Dock">
             <avalonDock:LayoutRoot>
                 <avalonDock:LayoutPanel Orientation="Horizontal">
 
-                    <avalonDock:LayoutAnchorablePane DockWidth="260">
+                    <avalonDock:LayoutAnchorablePane DockWidth="280">
                         <avalonDock:LayoutAnchorable Title="Object Explorer" CanClose="False" CanHide="False">
-                            <DockPanel>
-                                <TextBlock DockPanel.Dock="Top" Text="Rules (fixtures)" Margin="10,8,10,4"
-                                           FontWeight="SemiBold" Foreground="#FF334155"/>
-                                <ListBox Margin="4" BorderThickness="0" Background="Transparent"
-                                         ItemsSource="{Binding Rules}"
-                                         SelectedItem="{Binding SelectedRule, Mode=TwoWay}"
-                                         DisplayMemberPath="Display"/>
-                            </DockPanel>
+                            <TreeView x:Name="ExplorerTree" Margin="4" BorderThickness="0"
+                                      Background="Transparent"
+                                      ItemsSource="{Binding ExplorerRoots}"
+                                      SelectedItemChanged="OnTreeSelected">
+                                <TreeView.ItemContainerStyle>
+                                    <Style TargetType="TreeViewItem">
+                                        <Setter Property="IsExpanded" Value="{Binding IsExpanded, Mode=TwoWay}"/>
+                                        <Setter Property="IsSelected" Value="{Binding IsSelected, Mode=TwoWay}"/>
+                                        <Setter Property="Padding" Value="2,1"/>
+                                    </Style>
+                                </TreeView.ItemContainerStyle>
+                            </TreeView>
                         </avalonDock:LayoutAnchorable>
                     </avalonDock:LayoutAnchorablePane>
 
                     <avalonDock:LayoutDocumentPaneGroup>
                         <avalonDock:LayoutDocumentPane>
-                            <avalonDock:LayoutDocument Title="Rule Designer" CanClose="False">
-                                <Border Background="#FFFBFBFD">
-                                    <nodify:NodifyEditor x:Name="Editor"
-                                                         ItemsSource="{Binding Graph.Nodes}"
-                                                         Connections="{Binding Graph.Connections}"
-                                                         ItemTemplate="{StaticResource NodeTemplate}"
-                                                         ItemContainerStyle="{StaticResource NodeContainerStyle}"
-                                                         ConnectionTemplate="{StaticResource ConnectionTemplate}"
-                                                         GridCellSize="16"
-                                                         Background="#FFFBFBFD"/>
-                                </Border>
+                            <avalonDock:LayoutDocument Title="Workspace" CanClose="False">
+                                <Grid>
+                                    <!-- Rule designer -->
+                                    <Border Background="#FFFBFBFD"
+                                            Visibility="{Binding ShowReferenceView, Converter={StaticResource InverseBoolToVis}}">
+                                        <nodify:NodifyEditor x:Name="Editor"
+                                                             ItemsSource="{Binding Graph.Nodes}"
+                                                             Connections="{Binding Graph.Connections}"
+                                                             ItemTemplate="{StaticResource NodeTemplate}"
+                                                             ItemContainerStyle="{StaticResource NodeContainerStyle}"
+                                                             ConnectionTemplate="{StaticResource ConnectionTemplate}"
+                                                             GridCellSize="16"
+                                                             Background="#FFFBFBFD"/>
+                                    </Border>
+                                    <!-- Datasource (reference-set) grid -->
+                                    <DockPanel Background="White"
+                                               Visibility="{Binding ShowReferenceView, Converter={StaticResource BoolToVis}}">
+                                        <Border DockPanel.Dock="Top" Background="#FFF1F5F9" Padding="12,8"
+                                                BorderBrush="#FFE2E8F0" BorderThickness="0,0,0,1">
+                                            <TextBlock Text="{Binding ReferenceTitle}" FontWeight="SemiBold"
+                                                       Foreground="#FF334155"/>
+                                        </Border>
+                                        <DataGrid ItemsSource="{Binding ReferenceData}" IsReadOnly="True"
+                                                  AutoGenerateColumns="True" HeadersVisibility="Column"
+                                                  GridLinesVisibility="Horizontal" BorderThickness="0"
+                                                  RowBackground="White" AlternatingRowBackground="#FFF8FAFC"
+                                                  Background="White" FontSize="12"
+                                                  HorizontalGridLinesBrush="#FFEDF0F4"/>
+                                    </DockPanel>
+                                </Grid>
                             </avalonDock:LayoutDocument>
                         </avalonDock:LayoutDocumentPane>
                     </avalonDock:LayoutDocumentPaneGroup>
