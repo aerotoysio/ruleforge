@@ -1,0 +1,8 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/RuleForge.Core/RuleForge.Core.csproj" />
+    <Project Path="src/RuleForge.DocumentForge/RuleForge.DocumentForge.csproj" />
+    <Project Path="src/RuleForge.Studio.Core/RuleForge.Studio.Core.csproj" />
+    <Project Path="src/RuleForge.Studio/RuleForge.Studio.csproj" />
+  </Folder>
+</Solution>
