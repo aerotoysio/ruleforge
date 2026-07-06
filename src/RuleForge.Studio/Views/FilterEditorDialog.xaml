@@ -1,33 +1,112 @@
 <Window x:Class="RuleForge.Studio.Views.FilterEditorDialog"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Edit filter" Width="450" SizeToContent="Height"
+        xmlns:conv="clr-namespace:RuleForge.Studio.Converters"
+        Title="Edit filter" Width="480" SizeToContent="Height"
         WindowStartupLocation="CenterOwner" ResizeMode="NoResize"
         Background="#FFF3F4F6" TextOptions.TextFormattingMode="Display">
     <Window.Resources>
-        <Style TargetType="TextBlock">
+        <conv:BoolToVisibilityConverter x:Key="BoolToVis"/>
+        <Style x:Key="FieldLabel" TargetType="TextBlock">
             <Setter Property="Foreground" Value="#FF334155"/>
             <Setter Property="Margin" Value="0,12,0,3"/>
             <Setter Property="FontWeight" Value="SemiBold"/>
             <Setter Property="FontSize" Value="12.5"/>
         </Style>
+        <Style x:Key="Hint" TargetType="TextBlock">
+            <Setter Property="Foreground" Value="#FF94A3B8"/>
+            <Setter Property="FontSize" Value="11"/>
+            <Setter Property="Margin" Value="0,3,0,0"/>
+            <Setter Property="TextWrapping" Value="Wrap"/>
+        </Style>
         <Style TargetType="ComboBox">
             <Setter Property="Padding" Value="4,3"/>
         </Style>
+        <Style TargetType="TextBox">
+            <Setter Property="Padding" Value="4,3"/>
+            <Setter Property="BorderBrush" Value="#FFCBD5E1"/>
+        </Style>
     </Window.Resources>
 
-    <StackPanel Margin="18,10,18,16">
-        <TextBlock Text="Filter · request field" Margin="0,0,0,3"/>
-        <ComboBox ItemsSource="{Binding Fields}" SelectedItem="{Binding SelectedField}" DisplayMemberPath="Display"/>
+    <StackPanel Margin="18,8,18,16">
+        <TextBlock Text="Name" Style="{StaticResource FieldLabel}"/>
+        <TextBox Text="{Binding Label, UpdateSourceTrigger=PropertyChanged}"/>
 
-        <TextBlock Text="Operator"/>
+        <TextBlock Text="Description (shown on the node)" Style="{StaticResource FieldLabel}"/>
+        <TextBox Text="{Binding Description, UpdateSourceTrigger=PropertyChanged}"
+                 AcceptsReturn="False"/>
+        <TextBlock Text="Leave blank to auto-describe the filter (e.g. &quot;$.cabin equals 'Y'&quot;)."
+                   Style="{StaticResource Hint}"/>
+
+        <TextBlock Text="Request element (string)" Style="{StaticResource FieldLabel}"/>
+        <ComboBox ItemsSource="{Binding Fields}" SelectedItem="{Binding SelectedField}"
+                  DisplayMemberPath="Display"/>
+
+        <!-- Array semantics — only when the element sits inside a list -->
+        <StackPanel Visibility="{Binding IsArrayPath, Converter={StaticResource BoolToVis}}">
+            <TextBlock Text="This element is inside a list — how should the list be judged?"
+                       Style="{StaticResource FieldLabel}"/>
+            <ComboBox ItemsSource="{Binding ArrayModes}" SelectedItem="{Binding ArrayMode}"
+                      DisplayMemberPath="Display"/>
+        </StackPanel>
+
+        <TextBlock Text="Condition" Style="{StaticResource FieldLabel}"/>
         <ComboBox ItemsSource="{Binding Operators}" SelectedItem="{Binding Operator}"/>
 
-        <TextBlock Text="Value"/>
-        <TextBox Text="{Binding Value, UpdateSourceTrigger=PropertyChanged}" IsEnabled="{Binding ValueEnabled}"
-                 Padding="4,3" BorderBrush="#FFCBD5E1"/>
-        <TextBlock Text="For 'in' / 'not in', separate values with commas."
-                   FontWeight="Normal" FontSize="11" Foreground="#FF94A3B8" Margin="0,4,0,0"/>
+        <!-- Single value -->
+        <StackPanel Visibility="{Binding ShowSingleValue, Converter={StaticResource BoolToVis}}">
+            <TextBlock Text="Value" Style="{StaticResource FieldLabel}"/>
+            <TextBox Text="{Binding Value, UpdateSourceTrigger=PropertyChanged}"/>
+        </StackPanel>
+
+        <!-- Multiple values (in / not in) -->
+        <StackPanel Visibility="{Binding IsListOperator, Converter={StaticResource BoolToVis}}">
+            <TextBlock Text="Values (the element should / should not be one of these)"
+                       Style="{StaticResource FieldLabel}"/>
+            <DockPanel>
+                <Button DockPanel.Dock="Right" Content="Add" Command="{Binding AddValueCommand}"
+                        Padding="14,3" Margin="6,0,0,0" Background="White" BorderBrush="#FFCBD5E1" Cursor="Hand"/>
+                <TextBox Text="{Binding NewValue, UpdateSourceTrigger=PropertyChanged}"
+                         PreviewKeyDown="OnNewValueKeyDown"/>
+            </DockPanel>
+            <Border BorderBrush="#FFE2E8F0" BorderThickness="1" CornerRadius="4"
+                    Background="White" Margin="0,6,0,0" MinHeight="34" MaxHeight="150">
+                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                    <ItemsControl ItemsSource="{Binding Values}" Margin="4">
+                        <ItemsControl.ItemsPanel>
+                            <ItemsPanelTemplate>
+                                <WrapPanel/>
+                            </ItemsPanelTemplate>
+                        </ItemsControl.ItemsPanel>
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <Border Background="#FFEFF6FF" BorderBrush="#FFBFDBFE" BorderThickness="1"
+                                        CornerRadius="10" Padding="8,2,4,2" Margin="2">
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBlock Text="{Binding}" Foreground="#FF1D4ED8" FontSize="12"
+                                                   VerticalAlignment="Center"/>
+                                        <Button Content="✕" FontSize="9" Padding="4,1" Margin="5,0,0,0"
+                                                Background="Transparent" BorderThickness="0" Cursor="Hand"
+                                                Foreground="#FF64748B"
+                                                Command="{Binding DataContext.RemoveValueCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                CommandParameter="{Binding}"/>
+                                    </StackPanel>
+                                </Border>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </ScrollViewer>
+            </Border>
+        </StackPanel>
+
+        <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
+            <CheckBox Content="Ignore case" IsChecked="{Binding CaseInsensitive}" Foreground="#FF334155"/>
+            <CheckBox Content="Trim whitespace" IsChecked="{Binding Trim}" Margin="16,0,0,0" Foreground="#FF334155"/>
+        </StackPanel>
+
+        <TextBlock Text="If the element is missing from the request" Style="{StaticResource FieldLabel}"/>
+        <ComboBox ItemsSource="{Binding MissingModes}" SelectedItem="{Binding MissingMode}"
+                  DisplayMemberPath="Display"/>
 
         <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,18,0,0">
             <Button Content="Cancel" IsCancel="True" Padding="14,5" Margin="0,0,8,0"/>

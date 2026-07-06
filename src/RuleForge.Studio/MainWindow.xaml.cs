@@ -19,9 +19,19 @@ public partial class MainWindow : Window
         _viewModel = new MainViewModel();
         DataContext = _viewModel;
 
-        // Frame a freshly-loaded rule graph once the containers are realised.
+        // Frame a freshly-loaded rule graph once the containers are realised. FitToScreen picks
+        // the zoom that fits the extent; clamp it so small graphs open at a readable 1:1 rather
+        // than blown up, and large ones never shrink into unreadability.
         _viewModel.FitRequested += () =>
-            Dispatcher.BeginInvoke(() => Editor?.FitToScreen(null), DispatcherPriority.Background);
+            Dispatcher.BeginInvoke(() =>
+            {
+                if (Editor is null) return;
+                Editor.FitToScreen(null);
+                // Keep nodes readable on open: 1:1 for small graphs, never below 0.8 for
+                // large ones (pan to reach the rest).
+                if (Editor.ViewportZoom > 1.0) Editor.ViewportZoom = 1.0;
+                else if (Editor.ViewportZoom < 0.8) Editor.ViewportZoom = 0.8;
+            }, DispatcherPriority.Background);
 
         Loaded += async (_, _) => await _viewModel.InitializeAsync();
     }

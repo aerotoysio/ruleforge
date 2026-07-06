@@ -4,6 +4,7 @@ using System.Windows.Media;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using RuleForge.Core.Models;
+using RuleForge.Studio.Core.Authoring;
 
 namespace RuleForge.Studio.ViewModels;
 
@@ -42,6 +43,10 @@ public sealed partial class NodeViewModel : ObservableObject
     public required string CategoryLabel { get; init; }
     public required NodeCategory Category { get; init; }
     public required Brush AccentBrush { get; init; }
+
+    /// <summary>What the node does, in plain English — user text or an auto-generated summary.</summary>
+    public string Description { get; init; } = "";
+    public bool HasDescription => Description.Length > 0;
 
     public ObservableCollection<ConnectorViewModel> Inputs { get; } = new();
     public ObservableCollection<ConnectorViewModel> Outputs { get; } = new();
@@ -131,6 +136,7 @@ public sealed class GraphViewModel
                 CategoryLabel = CategoryLabel(n.Data.Category),
                 Category = n.Data.Category,
                 AccentBrush = AccentFor(n.Data.Category),
+                Description = DescribeNode(n),
                 Location = new Point(n.Position.X, n.Position.Y),
             };
             AddConnectors(vm);
@@ -176,6 +182,19 @@ public sealed class GraphViewModel
                 vm.Outputs.Add(new ConnectorViewModel { Title = "out", Kind = ConnectorKind.Default, Node = vm });
                 break;
         }
+    }
+
+    /// <summary>User description when present; otherwise a plain-English summary for filters.</summary>
+    private static string DescribeNode(RuleNode n)
+    {
+        if (!string.IsNullOrWhiteSpace(n.Data.Description))
+            return n.Data.Description.Trim();
+
+        if (n.Data.Category == NodeCategory.Filter
+            && FilterEditing.ReadStringFilter(n.Data.Config) is { } cfg)
+            return FilterEditing.Summarize(cfg);
+
+        return "";
     }
 
     private static string CategoryLabel(NodeCategory c) => c switch

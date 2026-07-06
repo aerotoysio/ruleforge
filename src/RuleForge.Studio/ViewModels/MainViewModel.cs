@@ -420,8 +420,11 @@ public sealed partial class MainViewModel : ObservableObject
         var dlg = new FilterEditorDialog { DataContext = vm, Owner = Application.Current.MainWindow };
         if (dlg.ShowDialog() == true && vm.SelectedField is not null)
         {
-            var config = FilterEditing.ToConfig(FilterEditing.BuildStringFilter(vm.SelectedField.Path, vm.Operator, vm.Value));
-            _currentRule = FilterEditing.ReplaceNodeConfig(_currentRule, node.Id, config);
+            var config = FilterEditing.ToConfig(FilterEditing.BuildStringFilter(
+                vm.SelectedField.Path, vm.Operator, vm.EffectiveValues,
+                vm.ArrayMode.Value, vm.MissingMode.Value, vm.CaseInsensitive, vm.Trim));
+
+            _currentRule = FilterEditing.UpdateNode(_currentRule, node.Id, vm.Label, vm.Description, config);
             RebuildGraph();
             Run();
         }
@@ -429,24 +432,38 @@ public sealed partial class MainViewModel : ObservableObject
 
     private FilterInspectorViewModel BuildFilterInspector(RuleNode node)
     {
-        var fields = SchemaFields.FromInputSchema(_currentRule!.InputSchema);
+        // Offer string elements (plus unknown-typed, so odd schemas stay usable).
+        var fields = SchemaFields.FromInputSchema(_currentRule!.InputSchema)
+            .Where(f => f.Type is SchemaFieldType.String or SchemaFieldType.Unknown)
+            .ToList();
+
         var existing = FilterEditing.ReadStringFilter(node.Data.Config);
         var path = existing?.Source.Path;
-        var opJson = existing is null ? "equals" : JsonName(existing.Compare.Operator);
-        var val = existing?.Compare.Value
-                  ?? (existing?.Compare.Values is { Count: > 0 } vs ? string.Join(", ", vs) : "");
 
-        return new FilterInspectorViewModel
+        var vm = new FilterInspectorViewModel
         {
             NodeId = node.Id,
-            NodeLabel = node.Data.Label,
             Fields = fields,
-            SelectedField = fields.FirstOrDefault(f => f.Path == path)
-                            ?? fields.FirstOrDefault(f => f.Type == SchemaFieldType.String)
-                            ?? fields.FirstOrDefault(),
-            Operator = opJson,
-            Value = val,
+            Label = node.Data.Label,
+            Description = node.Data.Description ?? "",
+            SelectedField = fields.FirstOrDefault(f => f.Path == path) ?? fields.FirstOrDefault(),
+            Operator = existing is null ? "equals" : FilterEditing.JsonName(existing.Compare.Operator),
+            Value = existing?.Compare.Value ?? "",
+            CaseInsensitive = existing?.Compare.CaseInsensitive ?? true,
+            Trim = existing?.Compare.Trim ?? true,
+            ArrayMode = FilterInspectorViewModel.ArrayModeOptions.FirstOrDefault(
+                    o => existing is not null && o.Value == FilterEditing.JsonName(existing.ArraySelector))
+                ?? FilterInspectorViewModel.ArrayModeOptions[0],
+            MissingMode = FilterInspectorViewModel.MissingModeOptions.FirstOrDefault(
+                    o => existing is not null && o.Value == FilterEditing.JsonName(existing.OnMissing))
+                ?? FilterInspectorViewModel.MissingModeOptions[0],
         };
+
+        if (existing?.Compare.Values is { } values)
+            foreach (var v in values)
+                vm.Values.Add(v);
+
+        return vm;
     }
 
     // ─── test harness (designer side-panel) ───────────────────────────────────
@@ -530,9 +547,6 @@ public sealed partial class MainViewModel : ObservableObject
 
     private static string Pretty(JsonElement? element)
         => element is null ? "  (none)" : JsonSerializer.Serialize(element.Value, new JsonSerializerOptions { WriteIndented = true });
-
-    private static string JsonName(StringFilterOperator op)
-        => JsonSerializer.Serialize(op, RuleForge.Core.AeroJson.Options).Trim('"');
 
     private static string LocateFixturesRoot()
     {

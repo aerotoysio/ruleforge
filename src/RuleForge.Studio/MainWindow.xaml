@@ -46,6 +46,8 @@
         <DataTemplate x:Key="NodeTemplate" DataType="{x:Type vm:NodeViewModel}">
             <nodify:Node Header="{Binding CategoryLabel}" HeaderBrush="{Binding AccentBrush}"
                          Input="{Binding Inputs}" Output="{Binding Outputs}"
+                         Background="White" ContentBrush="White"
+                         Foreground="#FF334155" BorderBrush="#FFCBD5E1" BorderThickness="1"
                          ToolTip="Double-click to edit · drag a connector to link">
                 <nodify:Node.InputConnectorTemplate>
                     <DataTemplate>
@@ -59,8 +61,13 @@
                                            IsConnected="{Binding IsConnected}"/>
                     </DataTemplate>
                 </nodify:Node.OutputConnectorTemplate>
-                <TextBlock Text="{Binding Title}" Foreground="#FF1F2937" FontSize="12.5"
-                           TextTrimming="CharacterEllipsis" MaxWidth="150"/>
+                <StackPanel MaxWidth="190" Margin="2,3">
+                    <TextBlock Text="{Binding Title}" Foreground="#FF1F2937" FontSize="13"
+                               FontWeight="SemiBold" TextTrimming="CharacterEllipsis"/>
+                    <TextBlock Text="{Binding Description}" Foreground="#FF64748B" FontSize="11"
+                               TextWrapping="Wrap" MaxHeight="44" Margin="0,3,0,0"
+                               Visibility="{Binding HasDescription, Converter={StaticResource BoolToVis}}"/>
+                </StackPanel>
             </nodify:Node>
         </DataTemplate>
 
