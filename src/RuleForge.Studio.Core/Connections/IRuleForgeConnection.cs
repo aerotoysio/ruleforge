@@ -25,6 +25,7 @@ public enum RuleForgeCapabilities
     Environments = 1 << 2,
     Publish = 1 << 3,     // write / publish versions back to the store
     LiveEngine = 1 << 4,  // /admin + eval against a running RuleForge.Api
+    WriteReferenceSets = 1 << 5, // create / edit / delete reference data
 }
 
 public sealed record RuleSummary(
@@ -51,6 +52,10 @@ public interface IRuleForgeConnection
 
     Task<IReadOnlyList<ReferenceSetSummary>> ListReferenceSetsAsync(CancellationToken ct = default);
     Task<ReferenceSet?> GetReferenceSetAsync(string id, CancellationToken ct = default);
+
+    /// <summary>Create or overwrite a reference set (requires <see cref="RuleForgeCapabilities.WriteReferenceSets"/>).</summary>
+    Task SaveReferenceSetAsync(ReferenceSet set, CancellationToken ct = default);
+    Task DeleteReferenceSetAsync(string id, CancellationToken ct = default);
 
     /// <summary>Reference-set source wired into in-process evaluation (mutator lookups, reference nodes).</summary>
     IReferenceSetSource ReferenceSetSource { get; }

@@ -17,11 +17,13 @@ using Rule = RuleForge.Core.Models.Rule;
 
 namespace RuleForge.Studio.ViewModels;
 
+/// <summary>Which pane the centre of the workspace shows.</summary>
+public enum CenterMode { Designer, Datasource, Tester }
+
 /// <summary>
-/// The application shell view-model: connections + Object Explorer, the connector-based Nodify
-/// designer (interactive edges, per-node config dialogs, toolbox), a datasource viewer, and the
-/// in-process test harness. The loaded <see cref="Rule"/> is the single source of truth; the canvas
-/// is re-projected from it after every structural edit.
+/// Application shell: connections + Object Explorer, the connector-based Nodify designer,
+/// a reference-data (datasource) manager, an in-process test harness, and a standalone rule tester.
+/// The loaded <see cref="Rule"/> is the single source of truth the canvas re-projects from.
 /// </summary>
 public sealed partial class MainViewModel : ObservableObject
 {
@@ -31,6 +33,11 @@ public sealed partial class MainViewModel : ObservableObject
     private Rule? _currentRule;
     private InProcessEvaluator? _evaluator;
 
+    // reference-data editing
+    private IRuleForgeConnection? _refConnection;
+    private string? _refEditId;
+    private int _refVersion = 1;
+
     private static readonly Dictionary<string, string> SampleScenario = new()
     {
         ["rule-bag-policy"] = "s-bag-3pc-markup15.json",
@@ -39,7 +46,6 @@ public sealed partial class MainViewModel : ObservableObject
         ["rule-seat-assignments"] = "s-2j-2s-2p.json",
     };
 
-    /// <summary>Node types offered in the canvas toolbox.</summary>
     public IReadOnlyList<ToolboxItem> Toolbox { get; } = new[]
     {
         new ToolboxItem("Filter", NodeCategory.Filter, "#2563EB"),
@@ -52,6 +58,9 @@ public sealed partial class MainViewModel : ObservableObject
     };
 
     public ObservableCollection<ExplorerNodeViewModel> ExplorerRoots { get; } = new();
+    public ObservableCollection<RuleNodeViewModel> AllRules { get; } = new();
+
+    [ObservableProperty] private CenterMode _centerMode = CenterMode.Designer;
 
     [ObservableProperty] private GraphViewModel? _graph;
     [ObservableProperty] private string _ruleHeader = "Select a rule or datasource in the Object Explorer.";
@@ -59,11 +68,16 @@ public sealed partial class MainViewModel : ObservableObject
     [ObservableProperty] private string _resultText = "";
     [ObservableProperty] private string _statusText = "Ready";
 
-    [ObservableProperty] private bool _showReferenceView;
+    // datasource
     [ObservableProperty] private string _referenceTitle = "";
+    [ObservableProperty] private string _referenceEditName = "";
     [ObservableProperty] private DataView? _referenceData;
 
-    /// <summary>Raised when a brand-new rule graph is loaded, so the view can fit it to screen.</summary>
+    // standalone tester
+    [ObservableProperty] private RuleNodeViewModel? _selectedTestRule;
+    [ObservableProperty] private string _testerRequestJson = "{\n}\n";
+    [ObservableProperty] private string _testerResultText = "";
+
     public event Action? FitRequested;
 
     public MainViewModel()
@@ -86,7 +100,9 @@ public sealed partial class MainViewModel : ObservableObject
             {
                 var conn = _workspace.CreateConnection(descriptor);
                 await conn.ConnectAsync();
-                ExplorerRoots.Add(await BuildConnectionNodeAsync(conn, descriptor.Id));
+                var node = await BuildConnectionNodeAsync(conn, descriptor.Id);
+                ExplorerRoots.Add(node);
+                CollectRules(node);
                 _workspace.TouchLastConnected(descriptor.Id);
             }
             catch (Exception ex)
@@ -102,8 +118,16 @@ public sealed partial class MainViewModel : ObservableObject
         await conn.ConnectAsync();
         _workspace.UpsertConnection(descriptor, apiKey);
         _workspace.TouchLastConnected(descriptor.Id);
-        ExplorerRoots.Add(await BuildConnectionNodeAsync(conn, descriptor.Id));
+        var node = await BuildConnectionNodeAsync(conn, descriptor.Id);
+        ExplorerRoots.Add(node);
+        CollectRules(node);
         StatusText = $"Connected '{descriptor.Name}'.";
+    }
+
+    private void CollectRules(ExplorerNodeViewModel node)
+    {
+        if (node is RuleNodeViewModel r) AllRules.Add(r);
+        foreach (var child in node.Children) CollectRules(child);
     }
 
     private void SeedFirstRun(string fixturesRoot)
@@ -135,16 +159,19 @@ public sealed partial class MainViewModel : ObservableObject
                 target.Children.Add(new RuleNodeViewModel { Name = r.Name, Glyph = "▪", Rule = r, Connection = conn });
         }
         connNode.Children.Add(rulesFolder);
-
-        var refFolder = new FolderNodeViewModel { Name = "Reference sets (datasources)" };
-        foreach (var rs in await conn.ListReferenceSetsAsync())
-            refFolder.Children.Add(new ReferenceSetNodeViewModel { Name = rs.Name, Glyph = "▤", ReferenceSet = rs, Connection = conn });
-        connNode.Children.Add(refFolder);
-
+        connNode.Children.Add(await BuildReferenceFolderAsync(conn));
         connNode.Children.Add(Placeholder("Products & templates"));
         connNode.Children.Add(Placeholder("Schemas"));
         connNode.Children.Add(Placeholder("Environments"));
         return connNode;
+    }
+
+    private static async Task<FolderNodeViewModel> BuildReferenceFolderAsync(IRuleForgeConnection conn)
+    {
+        var refFolder = new FolderNodeViewModel { Name = "Reference sets (datasources)" };
+        foreach (var rs in await conn.ListReferenceSetsAsync())
+            refFolder.Children.Add(new ReferenceSetNodeViewModel { Name = rs.Name, Glyph = "▤", ReferenceSet = rs, Connection = conn });
+        return refFolder;
     }
 
     private static FolderNodeViewModel Placeholder(string name)
@@ -165,7 +192,7 @@ public sealed partial class MainViewModel : ObservableObject
 
     private void ShowRule(IRuleForgeConnection conn, RuleSummary summary)
     {
-        ShowReferenceView = false;
+        CenterMode = CenterMode.Designer;
         ResultText = "";
         _currentRule = conn.GetRuleAsync(summary.Id).GetAwaiter().GetResult();
         _evaluator = new InProcessEvaluator(conn.ReferenceSetSource);
@@ -183,6 +210,8 @@ public sealed partial class MainViewModel : ObservableObject
         FitRequested?.Invoke();
     }
 
+    // ─── reference data (datasources) ─────────────────────────────────────────
+
     private void ShowReferenceSet(IRuleForgeConnection conn, ReferenceSetSummary summary)
     {
         var rs = conn.GetReferenceSetAsync(summary.Id).GetAwaiter().GetResult();
@@ -198,10 +227,125 @@ public sealed partial class MainViewModel : ObservableObject
             table.Rows.Add(dr);
         }
 
+        _refConnection = conn;
+        _refEditId = rs.Id;
+        _refVersion = rs.CurrentVersion;
+        ReferenceEditName = rs.Name;
         ReferenceData = table.DefaultView;
         ReferenceTitle = $"{rs.Name}   ·   {rs.Columns.Count} columns × {rs.Rows.Count} rows   ·   v{rs.CurrentVersion}";
         RuleHeader = ReferenceTitle;
-        ShowReferenceView = true;
+        CenterMode = CenterMode.Datasource;
+    }
+
+    /// <summary>Start a new datasource (key-value list or lookup table) in the editor.</summary>
+    public void NewReferenceSet(bool keyValue)
+    {
+        _refConnection = ExplorerRoots
+            .OfType<ConnectionNodeViewModel>()
+            .Select(c => c.Connection)
+            .FirstOrDefault(c => c.Capabilities.HasFlag(RuleForgeCapabilities.WriteReferenceSets));
+
+        if (_refConnection is null)
+        {
+            StatusText = "No connected workspace can store reference data.";
+            return;
+        }
+
+        var table = new DataTable();
+        if (keyValue) { table.Columns.Add("key", typeof(string)); table.Columns.Add("value", typeof(string)); }
+        else { table.Columns.Add("column1", typeof(string)); table.Columns.Add("column2", typeof(string)); }
+
+        _refEditId = null;
+        _refVersion = 1;
+        ReferenceEditName = keyValue ? "New key-value list" : "New lookup table";
+        ReferenceData = table.DefaultView;
+        ReferenceTitle = "New datasource — edit cells, then Save";
+        CenterMode = CenterMode.Datasource;
+    }
+
+    public void AddReferenceColumn(string name)
+    {
+        if (ReferenceData?.Table is { } table && !table.Columns.Contains(name))
+            table.Columns.Add(name, typeof(string));
+    }
+
+    public void ImportReferenceCsv(string csv)
+    {
+        var (columns, rows) = ReferenceEditing.ParseCsv(csv);
+        if (columns.Count == 0) { StatusText = "CSV had no header row."; return; }
+
+        var table = new DataTable();
+        foreach (var c in columns) table.Columns.Add(c, typeof(string));
+        foreach (var r in rows)
+        {
+            var dr = table.NewRow();
+            foreach (var c in columns) dr[c] = r.TryGetValue(c, out var v) ? v : "";
+            table.Rows.Add(dr);
+        }
+        ReferenceData = table.DefaultView;
+        StatusText = $"Imported {rows.Count} rows × {columns.Count} columns.";
+    }
+
+    [RelayCommand]
+    private async Task SaveReferenceSet()
+    {
+        if (_refConnection is null || ReferenceData?.Table is not { } table) return;
+        if (string.IsNullOrWhiteSpace(ReferenceEditName)) { StatusText = "Give the datasource a name first."; return; }
+
+        var columns = table.Columns.Cast<DataColumn>().Select(c => c.ColumnName).ToList();
+        var rows = table.Rows.Cast<DataRow>()
+            .Where(r => r.RowState != DataRowState.Deleted)
+            .Select(r => (IReadOnlyDictionary<string, string?>)columns.ToDictionary(c => c, c => r[c]?.ToString()))
+            .ToList();
+
+        var id = _refEditId ?? ReferenceEditing.SlugId(ReferenceEditName);
+        var set = ReferenceEditing.Build(id, ReferenceEditName.Trim(), columns, rows, _refVersion);
+
+        try
+        {
+            await _refConnection.SaveReferenceSetAsync(set);
+            _refEditId = id;
+            ReferenceTitle = $"{set.Name}   ·   {columns.Count} columns × {rows.Count} rows   ·   v{_refVersion}";
+            await RefreshReferenceFolderAsync(_refConnection);
+            StatusText = $"Saved datasource '{set.Name}'.";
+        }
+        catch (Exception ex)
+        {
+            StatusText = $"Could not save datasource: {ex.Message}";
+        }
+    }
+
+    [RelayCommand]
+    private async Task DeleteReferenceSet()
+    {
+        if (_refConnection is null || _refEditId is null) return;
+        if (MessageBox.Show(Application.Current.MainWindow!, $"Delete datasource '{ReferenceEditName}'?",
+                "RuleForge Studio", MessageBoxButton.OKCancel, MessageBoxImage.Warning) != MessageBoxResult.OK)
+            return;
+
+        try
+        {
+            await _refConnection.DeleteReferenceSetAsync(_refEditId);
+            await RefreshReferenceFolderAsync(_refConnection);
+            StatusText = $"Deleted datasource '{ReferenceEditName}'.";
+            ReferenceData = null;
+            CenterMode = CenterMode.Designer;
+        }
+        catch (Exception ex)
+        {
+            StatusText = $"Could not delete datasource: {ex.Message}";
+        }
+    }
+
+    private async Task RefreshReferenceFolderAsync(IRuleForgeConnection conn)
+    {
+        var connNode = ExplorerRoots.OfType<ConnectionNodeViewModel>().FirstOrDefault(c => ReferenceEquals(c.Connection, conn));
+        var folder = connNode?.Children.OfType<FolderNodeViewModel>().FirstOrDefault(f => f.Name.StartsWith("Reference sets"));
+        if (folder is null) return;
+
+        folder.Children.Clear();
+        foreach (var rs in await conn.ListReferenceSetsAsync())
+            folder.Children.Add(new ReferenceSetNodeViewModel { Name = rs.Name, Glyph = "▤", ReferenceSet = rs, Connection = conn });
     }
 
     // ─── canvas authoring ────────────────────────────────────────────────────
@@ -214,7 +358,6 @@ public sealed partial class MainViewModel : ObservableObject
         Graph = graph;
     }
 
-    /// <summary>Re-project the canvas from the rule after an edit, keeping node positions.</summary>
     private void RebuildGraph()
     {
         SyncPositionsFromGraph();
@@ -244,29 +387,19 @@ public sealed partial class MainViewModel : ObservableObject
         Run();
     }
 
-    /// <summary>Add a node at a graph-space location (used by toolbox drag-drop).</summary>
     public void AddNodeAt(NodeCategory category, double x, double y)
     {
-        if (_currentRule is null)
-        {
-            StatusText = "Open a rule before adding nodes.";
-            return;
-        }
+        if (_currentRule is null) { StatusText = "Open a rule before adding nodes."; return; }
         SyncPositionsFromGraph();
         var (updated, newId) = GraphEditing.AddNode(_currentRule, category, x, y);
         _currentRule = updated;
         LoadGraph();
-
         if (category == NodeCategory.Filter)
             EditNode(Graph?.Nodes.FirstOrDefault(n => n.Id == newId));
     }
 
     [RelayCommand]
-    private void AddFilter()
-    {
-        // Toolbar shortcut: drop a filter near the middle of the current view.
-        AddNodeAt(NodeCategory.Filter, 240, 200);
-    }
+    private void AddFilter() => AddNodeAt(NodeCategory.Filter, 240, 200);
 
     [RelayCommand]
     private void EditNode(NodeViewModel? nodeVm)
@@ -316,17 +449,42 @@ public sealed partial class MainViewModel : ObservableObject
         };
     }
 
-    // ─── test harness ────────────────────────────────────────────────────────
+    // ─── test harness (designer side-panel) ───────────────────────────────────
 
     [RelayCommand]
     private void Run()
     {
         if (_currentRule is null || _evaluator is null) return;
+        ResultText = Evaluate(_evaluator, _currentRule, RequestJson);
+    }
 
+    // ─── standalone rule tester ───────────────────────────────────────────────
+
+    [RelayCommand]
+    private void OpenTester() => CenterMode = CenterMode.Tester;
+
+    partial void OnSelectedTestRuleChanged(RuleNodeViewModel? value)
+    {
+        TesterResultText = "";
+        if (value is not null) TesterRequestJson = LoadSample(value.Rule.Id);
+    }
+
+    [RelayCommand]
+    private void RunTester()
+    {
+        if (SelectedTestRule is null) { TesterResultText = "Pick a rule to test."; return; }
+        var conn = SelectedTestRule.Connection;
+        var rule = conn.GetRuleAsync(SelectedTestRule.Rule.Id).GetAwaiter().GetResult();
+        if (rule is null) { TesterResultText = "Could not load the rule."; return; }
+        TesterResultText = Evaluate(new InProcessEvaluator(conn.ReferenceSetSource), rule, TesterRequestJson);
+    }
+
+    private static string Evaluate(InProcessEvaluator evaluator, Rule rule, string requestJson)
+    {
         try
         {
-            using var doc = JsonDocument.Parse(RequestJson);
-            var envelope = _evaluator.Evaluate(_currentRule, doc.RootElement, debug: true);
+            using var doc = JsonDocument.Parse(requestJson);
+            var envelope = evaluator.Evaluate(rule, doc.RootElement, debug: true);
 
             var sb = new StringBuilder();
             sb.AppendLine($"decision : {envelope.Decision}");
@@ -339,17 +497,19 @@ public sealed partial class MainViewModel : ObservableObject
             if (envelope.Trace is { } trace)
                 foreach (var t in trace)
                     sb.AppendLine($"  {t.Outcome,-6}  {t.NodeId}");
-            ResultText = sb.ToString();
+            return sb.ToString();
         }
         catch (JsonException jx)
         {
-            ResultText = $"Request is not valid JSON:\n{jx.Message}";
+            return $"Request is not valid JSON:\n{jx.Message}";
         }
         catch (Exception ex)
         {
-            ResultText = $"Evaluation error:\n{ex.Message}";
+            return $"Evaluation error:\n{ex.Message}";
         }
     }
+
+    // ─── helpers ───────────────────────────────────────────────────────────────
 
     private string LoadSample(string ruleId)
     {

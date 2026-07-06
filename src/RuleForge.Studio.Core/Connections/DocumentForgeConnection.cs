@@ -41,7 +41,8 @@ public sealed class DocumentForgeConnection : IRuleForgeConnection, IDisposable
 
     public RuleForgeCapabilities Capabilities =>
         RuleForgeCapabilities.Rules | RuleForgeCapabilities.ReferenceSets |
-        RuleForgeCapabilities.Environments | RuleForgeCapabilities.Publish;
+        RuleForgeCapabilities.Environments | RuleForgeCapabilities.Publish |
+        RuleForgeCapabilities.WriteReferenceSets;
 
     public IReferenceSetSource ReferenceSetSource => _refSource;
 
@@ -71,6 +72,19 @@ public sealed class DocumentForgeConnection : IRuleForgeConnection, IDisposable
 
     public Task<ReferenceSet?> GetReferenceSetAsync(string id, CancellationToken ct = default)
         => _refSource.GetByIdAsync(id, ct);
+
+    public async Task SaveReferenceSetAsync(ReferenceSet set, CancellationToken ct = default)
+    {
+        var collection = _prefix + "referencesets";
+        await _client.QueryAsync<object>($"DELETE FROM {collection} WHERE id = '{set.Id}'", ct);
+        await _client.InsertAsync(collection, set, ct);
+    }
+
+    public async Task DeleteReferenceSetAsync(string id, CancellationToken ct = default)
+    {
+        var collection = _prefix + "referencesets";
+        await _client.QueryAsync<object>($"DELETE FROM {collection} WHERE id = '{id}'", ct);
+    }
 
     public void Dispose() => _http.Dispose();
 

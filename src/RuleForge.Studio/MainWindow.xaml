@@ -13,8 +13,8 @@
     <Window.Resources>
         <conv:BoolToVisibilityConverter x:Key="BoolToVis"/>
         <conv:InverseBoolToVisibilityConverter x:Key="InverseBoolToVis"/>
+        <conv:EnumToVisibilityConverter x:Key="EnumVis"/>
 
-        <!-- ===== Object Explorer tree templates ===== -->
         <HierarchicalDataTemplate DataType="{x:Type vm:ConnectionNodeViewModel}" ItemsSource="{Binding Children}">
             <StackPanel Orientation="Horizontal">
                 <TextBlock Text="{Binding Glyph}" Foreground="#FF4F46E5" Margin="0,0,6,0"/>
@@ -43,22 +43,19 @@
             <TextBlock Text="{Binding Name}" FontStyle="Italic" Foreground="#FF94A3B8"/>
         </DataTemplate>
 
-        <!-- ===== Nodify node (connectors + typed outputs) ===== -->
         <DataTemplate x:Key="NodeTemplate" DataType="{x:Type vm:NodeViewModel}">
             <nodify:Node Header="{Binding CategoryLabel}" HeaderBrush="{Binding AccentBrush}"
                          Input="{Binding Inputs}" Output="{Binding Outputs}"
                          ToolTip="Double-click to edit · drag a connector to link">
                 <nodify:Node.InputConnectorTemplate>
                     <DataTemplate>
-                        <nodify:NodeInput Header="{Binding Title}"
-                                          Anchor="{Binding Anchor, Mode=OneWayToSource}"
+                        <nodify:NodeInput Header="{Binding Title}" Anchor="{Binding Anchor, Mode=OneWayToSource}"
                                           IsConnected="{Binding IsConnected}"/>
                     </DataTemplate>
                 </nodify:Node.InputConnectorTemplate>
                 <nodify:Node.OutputConnectorTemplate>
                     <DataTemplate>
-                        <nodify:NodeOutput Header="{Binding Title}"
-                                           Anchor="{Binding Anchor, Mode=OneWayToSource}"
+                        <nodify:NodeOutput Header="{Binding Title}" Anchor="{Binding Anchor, Mode=OneWayToSource}"
                                            IsConnected="{Binding IsConnected}"/>
                     </DataTemplate>
                 </nodify:Node.OutputConnectorTemplate>
@@ -85,13 +82,21 @@
                 <Separator/>
                 <MenuItem Header="E_xit" Click="OnExit"/>
             </MenuItem>
-            <MenuItem Header="_View"/>
+            <MenuItem Header="_Data">
+                <MenuItem Header="New _key-value list…" Click="OnNewKeyValue"/>
+                <MenuItem Header="New _lookup table…" Click="OnNewLookup"/>
+            </MenuItem>
+            <MenuItem Header="_Tools">
+                <MenuItem Header="_Rule Tester" Command="{Binding OpenTesterCommand}"/>
+            </MenuItem>
             <MenuItem Header="_Help">
                 <MenuItem Header="_About RuleForge Studio"/>
             </MenuItem>
         </Menu>
 
         <StatusBar DockPanel.Dock="Bottom" Background="#FFE5E7EB">
+            <StatusBarItem Content="{Binding StatusText}"/>
+            <Separator/>
             <StatusBarItem Content="{Binding RuleHeader}"/>
             <StatusBarItem HorizontalAlignment="Right" Content="RuleForge Studio v0.9.0 · Phase 2"/>
         </StatusBar>
@@ -119,58 +124,102 @@
                         <avalonDock:LayoutDocumentPane>
                             <avalonDock:LayoutDocument Title="Workspace" CanClose="False">
                                 <Grid>
-                                    <Grid.RowDefinitions>
-                                        <RowDefinition Height="Auto"/>
-                                        <RowDefinition Height="*"/>
-                                    </Grid.RowDefinitions>
-
-                                    <Border Grid.Row="0" Background="#FFEFF2F6" BorderBrush="#FFE2E8F0"
-                                            BorderThickness="0,0,0,1" Padding="8,5"
-                                            Visibility="{Binding ShowReferenceView, Converter={StaticResource InverseBoolToVis}}">
-                                        <StackPanel Orientation="Horizontal">
-                                            <Button Content="＋ Add filter" Command="{Binding AddFilterCommand}"
-                                                    Padding="10,3" Background="White" BorderBrush="#FFCBD5E1" Cursor="Hand"/>
-                                            <TextBlock Text="Double-click a node to edit · drag a connector to link · drag from the Toolbox to add"
-                                                       Foreground="#FF94A3B8" VerticalAlignment="Center"
-                                                       Margin="12,0,0,0" FontSize="11.5"/>
-                                        </StackPanel>
-                                    </Border>
-
-                                    <Border Grid.Row="1" Background="#FFFBFBFD"
-                                            Visibility="{Binding ShowReferenceView, Converter={StaticResource InverseBoolToVis}}">
-                                        <nodify:NodifyEditor x:Name="Editor"
-                                                             ItemsSource="{Binding Graph.Nodes}"
-                                                             Connections="{Binding Graph.Connections}"
-                                                             PendingConnection="{Binding Graph.PendingConnection}"
-                                                             ItemTemplate="{StaticResource NodeTemplate}"
-                                                             ItemContainerStyle="{StaticResource NodeContainerStyle}"
-                                                             ConnectionTemplate="{StaticResource ConnectionTemplate}"
-                                                             GridCellSize="16" Background="#FFFBFBFD"
-                                                             AllowDrop="True" Drop="OnEditorDrop" DragOver="OnEditorDragOver"
-                                                             PreviewMouseLeftButtonDown="OnEditorPreviewMouseDown">
-                                            <nodify:NodifyEditor.PendingConnectionTemplate>
-                                                <DataTemplate DataType="{x:Type vm:PendingConnectionViewModel}">
-                                                    <nodify:PendingConnection Source="{Binding Source}"
-                                                                              StartedCommand="{Binding StartCommand}"
-                                                                              CompletedCommand="{Binding FinishCommand}"
-                                                                              AllowOnlyConnectors="True"/>
-                                                </DataTemplate>
-                                            </nodify:NodifyEditor.PendingConnectionTemplate>
-                                        </nodify:NodifyEditor>
-                                    </Border>
-
-                                    <DockPanel Grid.Row="1" Background="White"
-                                               Visibility="{Binding ShowReferenceView, Converter={StaticResource BoolToVis}}">
-                                        <Border DockPanel.Dock="Top" Background="#FFF1F5F9" Padding="12,8"
-                                                BorderBrush="#FFE2E8F0" BorderThickness="0,0,0,1">
-                                            <TextBlock Text="{Binding ReferenceTitle}" FontWeight="SemiBold" Foreground="#FF334155"/>
+                                    <!-- ============ DESIGNER ============ -->
+                                    <Grid Visibility="{Binding CenterMode, Converter={StaticResource EnumVis}, ConverterParameter=Designer}">
+                                        <Grid.RowDefinitions>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="*"/>
+                                        </Grid.RowDefinitions>
+                                        <Border Grid.Row="0" Background="#FFEFF2F6" BorderBrush="#FFE2E8F0"
+                                                BorderThickness="0,0,0,1" Padding="8,5">
+                                            <StackPanel Orientation="Horizontal">
+                                                <Button Content="＋ Add filter" Command="{Binding AddFilterCommand}"
+                                                        Padding="10,3" Background="White" BorderBrush="#FFCBD5E1" Cursor="Hand"/>
+                                                <TextBlock Text="Double-click a node to edit · drag a connector to link · drag from the Toolbox to add"
+                                                           Foreground="#FF94A3B8" VerticalAlignment="Center" Margin="12,0,0,0" FontSize="11.5"/>
+                                            </StackPanel>
                                         </Border>
-                                        <DataGrid ItemsSource="{Binding ReferenceData}" IsReadOnly="True"
-                                                  AutoGenerateColumns="True" HeadersVisibility="Column"
-                                                  GridLinesVisibility="Horizontal" BorderThickness="0"
+                                        <Border Grid.Row="1" Background="#FFFBFBFD">
+                                            <nodify:NodifyEditor x:Name="Editor"
+                                                                 ItemsSource="{Binding Graph.Nodes}"
+                                                                 Connections="{Binding Graph.Connections}"
+                                                                 PendingConnection="{Binding Graph.PendingConnection}"
+                                                                 ItemTemplate="{StaticResource NodeTemplate}"
+                                                                 ItemContainerStyle="{StaticResource NodeContainerStyle}"
+                                                                 ConnectionTemplate="{StaticResource ConnectionTemplate}"
+                                                                 GridCellSize="16" Background="#FFFBFBFD"
+                                                                 AllowDrop="True" Drop="OnEditorDrop" DragOver="OnEditorDragOver"
+                                                                 PreviewMouseLeftButtonDown="OnEditorPreviewMouseDown">
+                                                <nodify:NodifyEditor.PendingConnectionTemplate>
+                                                    <DataTemplate DataType="{x:Type vm:PendingConnectionViewModel}">
+                                                        <nodify:PendingConnection Source="{Binding Source}"
+                                                                                  StartedCommand="{Binding StartCommand}"
+                                                                                  CompletedCommand="{Binding FinishCommand}"
+                                                                                  AllowOnlyConnectors="True"/>
+                                                    </DataTemplate>
+                                                </nodify:NodifyEditor.PendingConnectionTemplate>
+                                            </nodify:NodifyEditor>
+                                        </Border>
+                                    </Grid>
+
+                                    <!-- ============ DATASOURCE (reference data) ============ -->
+                                    <DockPanel Background="White"
+                                               Visibility="{Binding CenterMode, Converter={StaticResource EnumVis}, ConverterParameter=Datasource}">
+                                        <Border DockPanel.Dock="Top" Background="#FFF1F5F9" Padding="10,6"
+                                                BorderBrush="#FFE2E8F0" BorderThickness="0,0,0,1">
+                                            <StackPanel Orientation="Horizontal">
+                                                <TextBlock Text="Name:" VerticalAlignment="Center" Foreground="#FF334155" Margin="0,0,6,0"/>
+                                                <TextBox Text="{Binding ReferenceEditName, UpdateSourceTrigger=PropertyChanged}"
+                                                         Width="220" VerticalContentAlignment="Center" BorderBrush="#FFCBD5E1"/>
+                                                <Button Content="Add column" Click="OnAddReferenceColumn" Margin="12,0,0,0" Padding="8,3"/>
+                                                <Button Content="Import CSV…" Click="OnImportReferenceCsv" Margin="6,0,0,0" Padding="8,3"/>
+                                                <Button Content="Save" Command="{Binding SaveReferenceSetCommand}" Margin="12,0,0,0"
+                                                        Padding="12,3" Background="#FF2563EB" Foreground="White" BorderThickness="0" Cursor="Hand"/>
+                                                <Button Content="Delete" Command="{Binding DeleteReferenceSetCommand}" Margin="6,0,0,0" Padding="8,3"/>
+                                            </StackPanel>
+                                        </Border>
+                                        <DataGrid ItemsSource="{Binding ReferenceData}" AutoGenerateColumns="True"
+                                                  CanUserAddRows="True" CanUserDeleteRows="True" HeadersVisibility="All"
+                                                  GridLinesVisibility="All" BorderThickness="0"
                                                   RowBackground="White" AlternatingRowBackground="#FFF8FAFC"
-                                                  Background="White" FontSize="12" HorizontalGridLinesBrush="#FFEDF0F4"/>
+                                                  Background="White" FontSize="12" HorizontalGridLinesBrush="#FFEDF0F4"
+                                                  VerticalGridLinesBrush="#FFEDF0F4"/>
                                     </DockPanel>
+
+                                    <!-- ============ RULE TESTER ============ -->
+                                    <Grid Margin="16" Background="#FFFBFBFD"
+                                          Visibility="{Binding CenterMode, Converter={StaticResource EnumVis}, ConverterParameter=Tester}">
+                                        <Grid.RowDefinitions>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="2*"/>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="3*"/>
+                                        </Grid.RowDefinitions>
+                                        <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,10">
+                                            <TextBlock Text="Rule Tester — send JSON, see the output" FontWeight="SemiBold"
+                                                       FontSize="14" Foreground="#FF1F2937" VerticalAlignment="Center"/>
+                                        </StackPanel>
+                                        <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,0,0,8">
+                                            <TextBlock Text="Rule:" VerticalAlignment="Center" FontWeight="SemiBold"
+                                                       Foreground="#FF334155" Margin="0,0,8,0"/>
+                                            <ComboBox ItemsSource="{Binding AllRules}" SelectedItem="{Binding SelectedTestRule}"
+                                                      DisplayMemberPath="Name" Width="360"/>
+                                        </StackPanel>
+                                        <TextBox Grid.Row="2" Text="{Binding TesterRequestJson, UpdateSourceTrigger=PropertyChanged}"
+                                                 AcceptsReturn="True" AcceptsTab="True" FontFamily="Consolas" FontSize="12.5"
+                                                 VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto"
+                                                 BorderBrush="#FFCBD5E1" Background="White" Margin="0,0,0,8"/>
+                                        <Button Grid.Row="3" Content="▶  Send" Command="{Binding RunTesterCommand}"
+                                                HorizontalAlignment="Left" Padding="16,6" Margin="0,0,0,10"
+                                                Background="#FF2563EB" Foreground="White" BorderThickness="0" Cursor="Hand"/>
+                                        <TextBlock Grid.Row="4" Text="Output" FontWeight="SemiBold" Foreground="#FF334155" Margin="0,0,0,4"/>
+                                        <TextBox Grid.Row="5" Text="{Binding TesterResultText, Mode=OneWay}" IsReadOnly="True"
+                                                 FontFamily="Consolas" FontSize="12.5" Background="#FFF8FAFC"
+                                                 BorderBrush="#FFCBD5E1" TextWrapping="NoWrap"
+                                                 VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto"/>
+                                    </Grid>
                                 </Grid>
                             </avalonDock:LayoutDocument>
                         </avalonDock:LayoutDocumentPane>
@@ -185,8 +234,7 @@
                                                 BorderBrush="#FFE2E8F0" BorderThickness="1" Cursor="Hand"
                                                 MouseMove="OnToolboxItemMouseMove" ToolTip="Drag onto the canvas">
                                             <StackPanel Orientation="Horizontal">
-                                                <Border Width="11" Height="11" CornerRadius="2"
-                                                        Background="{Binding Color}" Margin="0,0,8,0"/>
+                                                <Border Width="11" Height="11" CornerRadius="2" Background="{Binding Color}" Margin="0,0,8,0"/>
                                                 <TextBlock Text="{Binding Name}" Foreground="#FF1F2937"/>
                                             </StackPanel>
                                         </Border>
@@ -206,8 +254,7 @@
                                     <RowDefinition Height="Auto"/>
                                     <RowDefinition Height="*"/>
                                 </Grid.RowDefinitions>
-                                <TextBlock Grid.Row="0" Text="Request (JSON)" FontWeight="SemiBold"
-                                           Foreground="#FF334155" Margin="0,0,0,4"/>
+                                <TextBlock Grid.Row="0" Text="Request (JSON)" FontWeight="SemiBold" Foreground="#FF334155" Margin="0,0,0,4"/>
                                 <TextBox Grid.Row="1" Text="{Binding RequestJson, UpdateSourceTrigger=PropertyChanged}"
                                          AcceptsReturn="True" AcceptsTab="True" FontFamily="Consolas" FontSize="12"
                                          VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto"
@@ -215,8 +262,7 @@
                                 <Button Grid.Row="2" Content="▶  Run in-process" Command="{Binding RunCommand}"
                                         HorizontalAlignment="Left" Margin="0,8,0,8" Padding="12,5"
                                         Background="#FF2563EB" Foreground="White" BorderThickness="0" Cursor="Hand"/>
-                                <TextBlock Grid.Row="3" Text="Result &amp; trace" FontWeight="SemiBold"
-                                           Foreground="#FF334155" Margin="0,0,0,4"/>
+                                <TextBlock Grid.Row="3" Text="Result &amp; trace" FontWeight="SemiBold" Foreground="#FF334155" Margin="0,0,0,4"/>
                                 <TextBox Grid.Row="4" Text="{Binding ResultText, Mode=OneWay}" IsReadOnly="True"
                                          FontFamily="Consolas" FontSize="12" Background="#FFF8FAFC"
                                          BorderBrush="#FFCBD5E1" TextWrapping="NoWrap"

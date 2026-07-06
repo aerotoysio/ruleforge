@@ -1,7 +1,9 @@
+using System.IO;
 using System.Windows;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
+using Microsoft.Win32;
 using RuleForge.Studio.ViewModels;
 using RuleForge.Studio.Views;
 
@@ -87,6 +89,25 @@ public partial class MainWindow : Window
             MessageBox.Show(this, $"Could not connect:\n{ex.Message}", "RuleForge Studio",
                 MessageBoxButton.OK, MessageBoxImage.Warning);
         }
+    }
+
+    // ─── reference data (datasources) ────────────────────────────────────────
+
+    private void OnNewKeyValue(object sender, RoutedEventArgs e) => _viewModel.NewReferenceSet(keyValue: true);
+
+    private void OnNewLookup(object sender, RoutedEventArgs e) => _viewModel.NewReferenceSet(keyValue: false);
+
+    private void OnAddReferenceColumn(object sender, RoutedEventArgs e)
+    {
+        if (InputDialog.Ask(this, "Column name", "Add column") is { } name)
+            _viewModel.AddReferenceColumn(name);
+    }
+
+    private void OnImportReferenceCsv(object sender, RoutedEventArgs e)
+    {
+        var dlg = new OpenFileDialog { Title = "Import CSV", Filter = "CSV files (*.csv)|*.csv|All files (*.*)|*.*" };
+        if (dlg.ShowDialog(this) == true)
+            _viewModel.ImportReferenceCsv(File.ReadAllText(dlg.FileName));
     }
 
     private void OnExit(object sender, RoutedEventArgs e) => Close();

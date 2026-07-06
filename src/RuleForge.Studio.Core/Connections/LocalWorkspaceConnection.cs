@@ -1,3 +1,5 @@
+using System.Text.Json;
+using RuleForge.Core;
 using RuleForge.Core.Loader;
 using RuleForge.Core.Models;
 
@@ -14,7 +16,7 @@ public sealed class LocalWorkspaceConnection : IRuleForgeConnection
     private readonly string _rulesDir;
     private readonly string _refsDir;
     private readonly LocalFileRuleSource _rules;
-    private readonly LocalFileReferenceSetSource _refs;
+    private LocalFileReferenceSetSource _refs;
 
     public LocalWorkspaceConnection(string rulesDir, string refsDir, string? displayName = null)
     {
@@ -27,7 +29,10 @@ public sealed class LocalWorkspaceConnection : IRuleForgeConnection
 
     public RuleForgeConnectionKind Kind => RuleForgeConnectionKind.LocalWorkspace;
     public string DisplayName { get; }
-    public RuleForgeCapabilities Capabilities => RuleForgeCapabilities.Rules | RuleForgeCapabilities.ReferenceSets;
+
+    public RuleForgeCapabilities Capabilities =>
+        RuleForgeCapabilities.Rules | RuleForgeCapabilities.ReferenceSets | RuleForgeCapabilities.WriteReferenceSets;
+
     public IReferenceSetSource ReferenceSetSource => _refs;
 
     public Task ConnectAsync(CancellationToken ct = default)
@@ -71,6 +76,23 @@ public sealed class LocalWorkspaceConnection : IRuleForgeConnection
 
     public Task<ReferenceSet?> GetReferenceSetAsync(string id, CancellationToken ct = default)
         => _refs.GetByIdAsync(id, ct);
+
+    public Task SaveReferenceSetAsync(ReferenceSet set, CancellationToken ct = default)
+    {
+        Directory.CreateDirectory(_refsDir);
+        var path = Path.Combine(_refsDir, $"{set.Id}.json");
+        File.WriteAllText(path, JsonSerializer.Serialize(set, AeroJson.Options));
+        _refs = new LocalFileReferenceSetSource(_refsDir); // drop cache so reads/eval see the change
+        return Task.CompletedTask;
+    }
+
+    public Task DeleteReferenceSetAsync(string id, CancellationToken ct = default)
+    {
+        var path = Path.Combine(_refsDir, $"{id}.json");
+        if (File.Exists(path)) File.Delete(path);
+        _refs = new LocalFileReferenceSetSource(_refsDir);
+        return Task.CompletedTask;
+    }
 
     private static IEnumerable<string> DiscoverRuleIds(string rulesDir)
     {
