@@ -31,6 +31,7 @@ public sealed partial class MainViewModel : ObservableObject
     private readonly string _scenariosDir;
 
     private Rule? _currentRule;
+    private IRuleForgeConnection? _currentConnection;
     private InProcessEvaluator? _evaluator;
 
     // reference-data editing
@@ -48,13 +49,13 @@ public sealed partial class MainViewModel : ObservableObject
 
     public IReadOnlyList<ToolboxItem> Toolbox { get; } = new[]
     {
-        new ToolboxItem("Filter", NodeCategory.Filter, "#2563EB"),
-        new ToolboxItem("Logic", NodeCategory.Logic, "#7C3AED"),
-        new ToolboxItem("Product", NodeCategory.Product, "#059669"),
-        new ToolboxItem("Mutator", NodeCategory.Mutator, "#D97706"),
-        new ToolboxItem("Calc", NodeCategory.Calc, "#0891B2"),
-        new ToolboxItem("Constant", NodeCategory.Constant, "#059669"),
-        new ToolboxItem("Output", NodeCategory.Output, "#64748B"),
+        new ToolboxItem("Filter", NodeCategory.Filter, "#7EA6E0"),
+        new ToolboxItem("Logic", NodeCategory.Logic, "#A99BDC"),
+        new ToolboxItem("Product", NodeCategory.Product, "#8CC7A6"),
+        new ToolboxItem("Mutator", NodeCategory.Mutator, "#E0BC7E"),
+        new ToolboxItem("Calc", NodeCategory.Calc, "#7EC2D4"),
+        new ToolboxItem("Constant", NodeCategory.Constant, "#8CC7A6"),
+        new ToolboxItem("Output", NodeCategory.Output, "#A3ADC2"),
     };
 
     public ObservableCollection<ExplorerNodeViewModel> ExplorerRoots { get; } = new();
@@ -195,6 +196,7 @@ public sealed partial class MainViewModel : ObservableObject
         CenterMode = CenterMode.Designer;
         ResultText = "";
         _currentRule = conn.GetRuleAsync(summary.Id).GetAwaiter().GetResult();
+        _currentConnection = conn;
         _evaluator = new InProcessEvaluator(conn.ReferenceSetSource);
 
         if (_currentRule is null)
@@ -421,7 +423,7 @@ public sealed partial class MainViewModel : ObservableObject
         if (dlg.ShowDialog() == true && vm.SelectedField is not null)
         {
             var config = FilterEditing.ToConfig(FilterEditing.BuildStringFilter(
-                vm.SelectedField.Path, vm.Operator, vm.EffectiveValues,
+                vm.SelectedField.Path, vm.BuildConditions(), vm.MatchMode.Value,
                 vm.ArrayMode.Value, vm.MissingMode.Value, vm.CaseInsensitive, vm.Trim));
 
             _currentRule = FilterEditing.UpdateNode(_currentRule, node.Id, vm.Label, vm.Description, config);
@@ -438,30 +440,48 @@ public sealed partial class MainViewModel : ObservableObject
             .ToList();
 
         var existing = FilterEditing.ReadStringFilter(node.Data.Config);
-        var path = existing?.Source.Path;
+        var conn = _currentConnection;
 
-        var vm = new FilterInspectorViewModel
+        var vm = new FilterInspectorViewModel(fields)
         {
             NodeId = node.Id,
-            Fields = fields,
             Label = node.Data.Label,
             Description = node.Data.Description ?? "",
-            SelectedField = fields.FirstOrDefault(f => f.Path == path) ?? fields.FirstOrDefault(),
-            Operator = existing is null ? "equals" : FilterEditing.JsonName(existing.Compare.Operator),
-            Value = existing?.Compare.Value ?? "",
             CaseInsensitive = existing?.Compare.CaseInsensitive ?? true,
             Trim = existing?.Compare.Trim ?? true,
+            MatchMode = FilterInspectorViewModel.MatchModeOptions.FirstOrDefault(
+                    o => o.Value == (existing?.Match ?? "all"))
+                ?? FilterInspectorViewModel.MatchModeOptions[0],
             ArrayMode = FilterInspectorViewModel.ArrayModeOptions.FirstOrDefault(
                     o => existing is not null && o.Value == FilterEditing.JsonName(existing.ArraySelector))
                 ?? FilterInspectorViewModel.ArrayModeOptions[0],
             MissingMode = FilterInspectorViewModel.MissingModeOptions.FirstOrDefault(
                     o => existing is not null && o.Value == FilterEditing.JsonName(existing.OnMissing))
                 ?? FilterInspectorViewModel.MissingModeOptions[0],
+            ListReferenceSets = conn is null
+                ? null
+                : () => conn.ListReferenceSetsAsync().GetAwaiter().GetResult(),
+            LoadReferenceSet = conn is null
+                ? null
+                : id => conn.GetReferenceSetAsync(id).GetAwaiter().GetResult(),
         };
 
-        if (existing?.Compare.Values is { } values)
-            foreach (var v in values)
-                vm.Values.Add(v);
+        vm.SelectPath(existing?.Source.Path);
+
+        if (existing is not null)
+        {
+            vm.Conditions.Clear();
+            foreach (var c in FilterEditing.ReadConditions(existing))
+            {
+                var cvm = new ConditionViewModel { Operator = c.Operator };
+                if (FilterEditing.IsListOperator(c.Operator))
+                    foreach (var v in c.Values) cvm.Values.Add(v);
+                else if (c.Values.Count > 0)
+                    cvm.Value = c.Values[0];
+                vm.Conditions.Add(cvm);
+            }
+            if (vm.Conditions.Count == 0) vm.Conditions.Add(new ConditionViewModel());
+        }
 
         return vm;
     }

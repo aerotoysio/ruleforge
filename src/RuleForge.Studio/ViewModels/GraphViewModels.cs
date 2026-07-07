@@ -48,6 +48,9 @@ public sealed partial class NodeViewModel : ObservableObject
     public string Description { get; init; } = "";
     public bool HasDescription => Description.Length > 0;
 
+    /// <summary>Dark same-hue text used on the pastel header band.</summary>
+    public Brush HeaderTextBrush { get; init; } = Brushes.Black;
+
     public ObservableCollection<ConnectorViewModel> Inputs { get; } = new();
     public ObservableCollection<ConnectorViewModel> Outputs { get; } = new();
 }
@@ -129,13 +132,15 @@ public sealed class GraphViewModel
         var byId = new Dictionary<string, NodeViewModel>();
         foreach (var n in rule.Nodes)
         {
+            var (headerBg, headerFg) = PaletteFor(n.Data.Category);
             var vm = new NodeViewModel
             {
                 Id = n.Id,
                 Title = string.IsNullOrWhiteSpace(n.Data.Label) ? n.Id : n.Data.Label,
                 CategoryLabel = CategoryLabel(n.Data.Category),
                 Category = n.Data.Category,
-                AccentBrush = AccentFor(n.Data.Category),
+                AccentBrush = headerBg,
+                HeaderTextBrush = headerFg,
                 Description = DescribeNode(n),
                 Location = new Point(n.Position.X, n.Position.Y),
             };
@@ -206,22 +211,28 @@ public sealed class GraphViewModel
         _ => c.ToString().ToLowerInvariant(),
     };
 
-    private static Brush AccentFor(NodeCategory c)
+    /// <summary>Pastel header background + dark same-hue text, per category.</summary>
+    public static (Brush Background, Brush Text) PaletteFor(NodeCategory c)
     {
-        var hex = c switch
+        var (bg, fg) = c switch
         {
-            NodeCategory.Input or NodeCategory.Output => "#64748B",
-            NodeCategory.Filter or NodeCategory.FilterList => "#2563EB",
-            NodeCategory.Logic => "#7C3AED",
-            NodeCategory.Product or NodeCategory.Constant => "#059669",
-            NodeCategory.Mutator => "#D97706",
-            NodeCategory.Calc => "#0891B2",
-            NodeCategory.Reference => "#4F46E5",
-            NodeCategory.RuleRef => "#DB2777",
-            NodeCategory.Switch or NodeCategory.Assert or NodeCategory.Bucket => "#9333EA",
-            NodeCategory.Iterator or NodeCategory.Merge => "#0D9488",
-            _ => "#64748B",
+            NodeCategory.Input or NodeCategory.Output => ("#E5E9F2", "#46536B"),
+            NodeCategory.Filter or NodeCategory.FilterList => ("#DCEAFB", "#31599B"),
+            NodeCategory.Logic => ("#E9E3FA", "#5C48A8"),
+            NodeCategory.Product or NodeCategory.Constant => ("#D9F2E5", "#20714E"),
+            NodeCategory.Mutator => ("#FBEDD3", "#8F5F1D"),
+            NodeCategory.Calc => ("#D8F1F7", "#1D6A80"),
+            NodeCategory.Reference => ("#E2E6FA", "#4550A8"),
+            NodeCategory.RuleRef => ("#FADFE9", "#A0446C"),
+            NodeCategory.Switch or NodeCategory.Assert or NodeCategory.Bucket => ("#EFE2F9", "#71459B"),
+            NodeCategory.Iterator or NodeCategory.Merge => ("#D6F0EC", "#1E6E62"),
+            _ => ("#E5E9F2", "#46536B"),
         };
+        return (Freeze(bg), Freeze(fg));
+    }
+
+    private static SolidColorBrush Freeze(string hex)
+    {
         var brush = new SolidColorBrush((Color)ColorConverter.ConvertFromString(hex));
         brush.Freeze();
         return brush;

@@ -3,5 +3,67 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              StartupUri="MainWindow.xaml">
     <Application.Resources>
+        <!-- ===== Pastel palette ===== -->
+        <SolidColorBrush x:Key="App.Background" Color="#F6F7FB"/>
+        <SolidColorBrush x:Key="App.Surface" Color="#FFFFFF"/>
+        <SolidColorBrush x:Key="App.SurfaceAlt" Color="#F0F2F8"/>
+        <SolidColorBrush x:Key="App.Border" Color="#E4E7F0"/>
+        <SolidColorBrush x:Key="App.Text" Color="#3A4358"/>
+        <SolidColorBrush x:Key="App.TextMuted" Color="#8B94A9"/>
+        <SolidColorBrush x:Key="App.Accent" Color="#8B93E8"/>
+        <SolidColorBrush x:Key="App.AccentDark" Color="#5A63C8"/>
+        <SolidColorBrush x:Key="App.AccentSoft" Color="#E4E6FA"/>
+
+        <!-- Rounded accent button (primary actions) -->
+        <Style x:Key="AccentButton" TargetType="Button">
+            <Setter Property="Background" Value="{StaticResource App.Accent}"/>
+            <Setter Property="Foreground" Value="White"/>
+            <Setter Property="Padding" Value="14,6"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border Background="{TemplateBinding Background}" CornerRadius="6"
+                                Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter Property="Background" Value="{StaticResource App.AccentDark}"/>
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter Property="Opacity" Value="0.45"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- Rounded subtle button (secondary actions) -->
+        <Style x:Key="SubtleButton" TargetType="Button">
+            <Setter Property="Background" Value="{StaticResource App.Surface}"/>
+            <Setter Property="Foreground" Value="{StaticResource App.Text}"/>
+            <Setter Property="Padding" Value="12,5"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border Background="{TemplateBinding Background}" CornerRadius="6"
+                                BorderBrush="{StaticResource App.Border}" BorderThickness="1"
+                                Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter Property="Background" Value="{StaticResource App.AccentSoft}"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
     </Application.Resources>
 </Application>

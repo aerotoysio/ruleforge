@@ -2,13 +2,14 @@
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:avalonDock="https://github.com/Dirkster99/AvalonDock"
+        xmlns:adtheme="clr-namespace:AvalonDock.Themes;assembly=AvalonDock.Themes.VS2013"
         xmlns:nodify="clr-namespace:Nodify;assembly=Nodify"
         xmlns:vm="clr-namespace:RuleForge.Studio.ViewModels"
         xmlns:conv="clr-namespace:RuleForge.Studio.Converters"
         Title="RuleForge Studio" Height="800" Width="1320"
         WindowStartupLocation="CenterScreen"
         Icon="Assets/ruleforge.ico"
-        Background="#FFF3F4F6"
+        Background="{StaticResource App.Background}"
         TextOptions.TextFormattingMode="Display">
     <Window.Resources>
         <conv:BoolToVisibilityConverter x:Key="BoolToVis"/>
@@ -47,25 +48,37 @@
             <nodify:Node Header="{Binding CategoryLabel}" HeaderBrush="{Binding AccentBrush}"
                          Input="{Binding Inputs}" Output="{Binding Outputs}"
                          Background="White" ContentBrush="White"
-                         Foreground="#FF334155" BorderBrush="#FFCBD5E1" BorderThickness="1"
+                         Foreground="#3A4358" BorderBrush="#E4E7F0" BorderThickness="1"
+                         ContentPadding="14,10,14,12"
                          ToolTip="Double-click to edit · drag a connector to link">
+                <nodify:Node.HeaderTemplate>
+                    <DataTemplate>
+                        <TextBlock Text="{Binding}" FontWeight="SemiBold" FontSize="11" Padding="4,3"
+                                   Foreground="{Binding DataContext.HeaderTextBrush,
+                                                RelativeSource={RelativeSource AncestorType=nodify:Node}}"/>
+                    </DataTemplate>
+                </nodify:Node.HeaderTemplate>
                 <nodify:Node.InputConnectorTemplate>
                     <DataTemplate>
                         <nodify:NodeInput Header="{Binding Title}" Anchor="{Binding Anchor, Mode=OneWayToSource}"
-                                          IsConnected="{Binding IsConnected}"/>
+                                          IsConnected="{Binding IsConnected}"
+                                          Background="Transparent" BorderBrush="Transparent"
+                                          Foreground="#8B94A9" FontSize="10.5"/>
                     </DataTemplate>
                 </nodify:Node.InputConnectorTemplate>
                 <nodify:Node.OutputConnectorTemplate>
                     <DataTemplate>
                         <nodify:NodeOutput Header="{Binding Title}" Anchor="{Binding Anchor, Mode=OneWayToSource}"
-                                           IsConnected="{Binding IsConnected}"/>
+                                           IsConnected="{Binding IsConnected}"
+                                           Background="Transparent" BorderBrush="Transparent"
+                                           Foreground="#8B94A9" FontSize="10.5"/>
                     </DataTemplate>
                 </nodify:Node.OutputConnectorTemplate>
-                <StackPanel MaxWidth="190" Margin="2,3">
-                    <TextBlock Text="{Binding Title}" Foreground="#FF1F2937" FontSize="13"
+                <StackPanel MinWidth="150" MaxWidth="220" Margin="2,4">
+                    <TextBlock Text="{Binding Title}" Foreground="#2E3648" FontSize="13.5"
                                FontWeight="SemiBold" TextTrimming="CharacterEllipsis"/>
-                    <TextBlock Text="{Binding Description}" Foreground="#FF64748B" FontSize="11"
-                               TextWrapping="Wrap" MaxHeight="44" Margin="0,3,0,0"
+                    <TextBlock Text="{Binding Description}" Foreground="#8B94A9" FontSize="11.5"
+                               TextWrapping="Wrap" MaxHeight="52" Margin="0,4,0,0"
                                Visibility="{Binding HasDescription, Converter={StaticResource BoolToVis}}"/>
                 </StackPanel>
             </nodify:Node>
@@ -101,7 +114,8 @@
             </MenuItem>
         </Menu>
 
-        <StatusBar DockPanel.Dock="Bottom" Background="#FFE5E7EB">
+        <StatusBar DockPanel.Dock="Bottom" Background="{StaticResource App.SurfaceAlt}"
+                   Foreground="{StaticResource App.Text}">
             <StatusBarItem Content="{Binding StatusText}"/>
             <Separator/>
             <StatusBarItem Content="{Binding RuleHeader}"/>
@@ -109,6 +123,9 @@
         </StatusBar>
 
         <avalonDock:DockingManager x:Name="Dock">
+            <avalonDock:DockingManager.Theme>
+                <adtheme:Vs2013LightTheme/>
+            </avalonDock:DockingManager.Theme>
             <avalonDock:LayoutRoot>
                 <avalonDock:LayoutPanel Orientation="Horizontal">
 
@@ -141,7 +158,7 @@
                                                 BorderThickness="0,0,0,1" Padding="8,5">
                                             <StackPanel Orientation="Horizontal">
                                                 <Button Content="＋ Add filter" Command="{Binding AddFilterCommand}"
-                                                        Padding="10,3" Background="White" BorderBrush="#FFCBD5E1" Cursor="Hand"/>
+                                                        Style="{StaticResource SubtleButton}"/>
                                                 <TextBlock Text="Double-click a node to edit · drag a connector to link · drag from the Toolbox to add"
                                                            Foreground="#FF94A3B8" VerticalAlignment="Center" Margin="12,0,0,0" FontSize="11.5"/>
                                             </StackPanel>
@@ -178,11 +195,11 @@
                                                 <TextBlock Text="Name:" VerticalAlignment="Center" Foreground="#FF334155" Margin="0,0,6,0"/>
                                                 <TextBox Text="{Binding ReferenceEditName, UpdateSourceTrigger=PropertyChanged}"
                                                          Width="220" VerticalContentAlignment="Center" BorderBrush="#FFCBD5E1"/>
-                                                <Button Content="Add column" Click="OnAddReferenceColumn" Margin="12,0,0,0" Padding="8,3"/>
-                                                <Button Content="Import CSV…" Click="OnImportReferenceCsv" Margin="6,0,0,0" Padding="8,3"/>
+                                                <Button Content="Add column" Click="OnAddReferenceColumn" Margin="12,0,0,0" Style="{StaticResource SubtleButton}"/>
+                                                <Button Content="Import CSV…" Click="OnImportReferenceCsv" Margin="6,0,0,0" Style="{StaticResource SubtleButton}"/>
                                                 <Button Content="Save" Command="{Binding SaveReferenceSetCommand}" Margin="12,0,0,0"
-                                                        Padding="12,3" Background="#FF2563EB" Foreground="White" BorderThickness="0" Cursor="Hand"/>
-                                                <Button Content="Delete" Command="{Binding DeleteReferenceSetCommand}" Margin="6,0,0,0" Padding="8,3"/>
+                                                        Style="{StaticResource AccentButton}"/>
+                                                <Button Content="Delete" Command="{Binding DeleteReferenceSetCommand}" Margin="6,0,0,0" Style="{StaticResource SubtleButton}"/>
                                             </StackPanel>
                                         </Border>
                                         <DataGrid ItemsSource="{Binding ReferenceData}" AutoGenerateColumns="True"
@@ -219,8 +236,8 @@
                                                  VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto"
                                                  BorderBrush="#FFCBD5E1" Background="White" Margin="0,0,0,8"/>
                                         <Button Grid.Row="3" Content="▶  Send" Command="{Binding RunTesterCommand}"
-                                                HorizontalAlignment="Left" Padding="16,6" Margin="0,0,0,10"
-                                                Background="#FF2563EB" Foreground="White" BorderThickness="0" Cursor="Hand"/>
+                                                HorizontalAlignment="Left" Margin="0,0,0,10"
+                                                Style="{StaticResource AccentButton}"/>
                                         <TextBlock Grid.Row="4" Text="Output" FontWeight="SemiBold" Foreground="#FF334155" Margin="0,0,0,4"/>
                                         <TextBox Grid.Row="5" Text="{Binding TesterResultText, Mode=OneWay}" IsReadOnly="True"
                                                  FontFamily="Consolas" FontSize="12.5" Background="#FFF8FAFC"
@@ -267,8 +284,8 @@
                                          VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto"
                                          BorderBrush="#FFCBD5E1" Background="White"/>
                                 <Button Grid.Row="2" Content="▶  Run in-process" Command="{Binding RunCommand}"
-                                        HorizontalAlignment="Left" Margin="0,8,0,8" Padding="12,5"
-                                        Background="#FF2563EB" Foreground="White" BorderThickness="0" Cursor="Hand"/>
+                                        HorizontalAlignment="Left" Margin="0,8,0,8"
+                                        Style="{StaticResource AccentButton}"/>
                                 <TextBlock Grid.Row="3" Text="Result &amp; trace" FontWeight="SemiBold" Foreground="#FF334155" Margin="0,0,0,4"/>
                                 <TextBox Grid.Row="4" Text="{Binding ResultText, Mode=OneWay}" IsReadOnly="True"
                                          FontFamily="Consolas" FontSize="12" Background="#FFF8FAFC"

@@ -60,11 +60,11 @@ Direction: **the level above the canvas is an overview document; the canvas is c
 - The rule graph view itself carries no configuration clutter — just the endpoint + the
   editable canvas.
 
-**OPEN QUESTION (blocks build):** is the overview per **rule** (Bag policy owns its
-schemas — matches current storage; Category stays a plain folder) or per **category/
-family** ("Ancillary" shares ONE request/response schema across its rules — a modelling
-change: shared-schema family entity, migration + editor compat)? Andrew's phrasing
-suggests the latter; confirm before building.
+**DECIDED (2026-07-07): schema is per RULE** — a group can contain rules with different
+schemas, so the overview document lives at the rule level (Category stays a folder).
+Additionally: a **settings area to ASSIGN schemas to rules** (pick/reuse schemas rather
+than only inline-editing them) — pairs with a schema library. Build with the Rule
+Overview document.
 
 ## 3. Cross-cutting gaps (React editor → Studio)
 
